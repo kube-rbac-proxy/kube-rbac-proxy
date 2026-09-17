@@ -134,8 +134,9 @@ type completedProxyRunOptions struct {
 	upstreamForceH2C bool
 	upstreamCABundle *x509.CertPool
 
-	http2Disable bool
-	http2Options *http2.Server
+	http2Disable              bool
+	http2MaxConcurrentStreams uint32
+	http2MaxSize              uint32
 
 	auth *proxy.Config
 	tls  *options.TLSConfig
@@ -204,15 +205,25 @@ func Complete(o *options.ProxyRunOptions) (*completedProxyRunOptions, error) {
 	}
 
 	completed.http2Disable = o.HTTP2Disable
-	completed.http2Options = &http2.Server{
-		IdleTimeout:                  90 * time.Second,
-		MaxConcurrentStreams:         o.HTTP2MaxConcurrentStreams,
-		MaxReadFrameSize:             o.HTTP2MaxSize,
-		MaxUploadBufferPerStream:     int32(o.HTTP2MaxSize),
-		MaxUploadBufferPerConnection: int32(o.HTTP2MaxSize) * int32(o.HTTP2MaxConcurrentStreams),
-	}
+	completed.http2MaxConcurrentStreams = o.HTTP2MaxConcurrentStreams
+	completed.http2MaxSize = o.HTTP2MaxSize
 
 	return completed, nil
+}
+
+// newHTTP2Server returns a new *http2.Server on every call, because
+// http2.ConfigureServer stores per-server state in it. With Go < 1.27 a
+// shared one breaks graceful shutdown; with Go >= 1.27 golang.org/x/net
+// panics when a shared one, or a copy of a configured one, is configured
+// again (#450).
+func newHTTP2Server(maxConcurrentStreams, maxSize uint32) *http2.Server {
+	return &http2.Server{
+		IdleTimeout:                  90 * time.Second,
+		MaxConcurrentStreams:         maxConcurrentStreams,
+		MaxReadFrameSize:             maxSize,
+		MaxUploadBufferPerStream:     int32(maxSize),
+		MaxUploadBufferPerConnection: int32(maxSize) * int32(maxConcurrentStreams),
+	}
 }
 
 func Run(cfg *completedProxyRunOptions) error {
@@ -383,7 +394,7 @@ func Run(cfg *completedProxyRunOptions) error {
 				// https://github.com/kubernetes/kubernetes/blob/de054fbf9422d778568946de21a48c7330a6c1b7/staging/src/k8s.io/apiserver/pkg/server/secure_serving.go#L55-L59
 				srv.TLSConfig.NextProtos = []string{"http/1.1"}
 			} else {
-				if err := http2.ConfigureServer(srv, cfg.http2Options); err != nil {
+				if err := http2.ConfigureServer(srv, newHTTP2Server(cfg.http2MaxConcurrentStreams, cfg.http2MaxSize)); err != nil {
 					return fmt.Errorf("failed to configure http2 server: %w", err)
 				}
 			}
@@ -425,7 +436,7 @@ func Run(cfg *completedProxyRunOptions) error {
 					// https://github.com/kubernetes/kubernetes/blob/de054fbf9422d778568946de21a48c7330a6c1b7/staging/src/k8s.io/apiserver/pkg/server/secure_serving.go#L55-L59
 					srv.TLSConfig.NextProtos = []string{"http/1.1"}
 				} else {
-					if err := http2.ConfigureServer(proxyEndpointsSrv, cfg.http2Options); err != nil {
+					if err := http2.ConfigureServer(proxyEndpointsSrv, newHTTP2Server(cfg.http2MaxConcurrentStreams, cfg.http2MaxSize)); err != nil {
 						return fmt.Errorf("failed to configure http2 server: %w", err)
 					}
 				}
@@ -461,7 +472,7 @@ func Run(cfg *completedProxyRunOptions) error {
 			if cfg.http2Disable {
 				srv.Handler = mux
 			} else {
-				srv.Handler = h2c.NewHandler(mux, cfg.http2Options) //nolint:staticcheck // see h2c import comment, #446
+				srv.Handler = h2c.NewHandler(mux, newHTTP2Server(cfg.http2MaxConcurrentStreams, cfg.http2MaxSize)) //nolint:staticcheck // see h2c import comment, #446
 			}
 
 			l, err := net.Listen("tcp", cfg.insecureListenAddress)
