@@ -367,6 +367,14 @@ func Run(cfg *completedProxyRunOptions) error {
 				return fmt.Errorf("failed to convert TLS cipher suite name to ID: %w", err)
 			}
 
+			if len(cfg.tls.CurvePreferences) > 0 {
+				curvePreferences, err := k8sapiflag.TLSCurvePreferences(cfg.tls.CurvePreferences)
+				if err != nil {
+					return fmt.Errorf("failed to convert TLS curve preference to ID: %w", err)
+				}
+				srv.TLSConfig.CurvePreferences = curvePreferences
+			}
+
 			srv.TLSConfig.CipherSuites = cipherSuiteIDs
 			srv.TLSConfig.MinVersion = version
 			srv.TLSConfig.ClientAuth = tls.RequestClientCert
