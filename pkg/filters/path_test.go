@@ -18,6 +18,7 @@ package filters_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"testing"
 
 	"github.com/brancz/kube-rbac-proxy/pkg/filters"
@@ -69,5 +70,57 @@ func TestAllowPath(t *testing.T) {
 				t.Errorf("want: %d\nhave: %d\n", tt.status, res.StatusCode)
 			}
 		})
+	}
+}
+
+func TestAllowPathRejectsNonCanonicalPath(t *testing.T) {
+	handler := filters.WithAllowPaths([]string{"/public/*"}, emptyHandler)
+
+	req := httptest.NewRequest("GET", "/public/..", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Errorf("non-canonical path /public/.. was not rejected: got status %d, want 400", rec.Code)
+	}
+}
+
+func TestIgnorePathRejectsNonCanonicalPath(t *testing.T) {
+	var upstreamCalled bool
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+	})
+
+	ignorePaths := []string{"/public/*"}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		cleaned := path.Clean(req.URL.Path)
+		if cleaned != req.URL.Path {
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+
+		for _, pathIgnored := range ignorePaths {
+			found, err := path.Match(pathIgnored, cleaned)
+			if err != nil {
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			if found {
+				upstream.ServeHTTP(w, req)
+				return
+			}
+		}
+		http.NotFound(w, req)
+	})
+
+	req := httptest.NewRequest("GET", "/public/..", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if upstreamCalled {
+		t.Error("non-canonical path /public/.. reached upstream via ignore-paths")
+	}
+	if rec.Code == http.StatusOK {
+		t.Errorf("non-canonical path /public/.. was not rejected: got status %d, want 400", rec.Code)
 	}
 }

@@ -26,8 +26,14 @@ func WithAllowPaths(allowPaths []string, handler http.HandlerFunc) http.HandlerF
 	}
 
 	return func(w http.ResponseWriter, req *http.Request) {
+		cleaned := path.Clean(req.URL.Path)
+		if cleaned != req.URL.Path {
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+
 		for _, pathAllowed := range allowPaths {
-			found, err := path.Match(pathAllowed, req.URL.Path)
+			found, err := path.Match(pathAllowed, cleaned)
 			if err != nil {
 				http.Error(
 					w,

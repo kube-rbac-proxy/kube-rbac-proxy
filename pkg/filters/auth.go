@@ -107,17 +107,20 @@ func WithAuthorization(
 // WithAuthHeaders adds identity information to the headers.
 // Must not be used, if connection is not encrypted with TLS.
 func WithAuthHeaders(cfg *authn.AuthnHeaderConfig, handler http.HandlerFunc) http.HandlerFunc {
-	if !cfg.Enabled {
-		return handler
-	}
-
 	return func(w http.ResponseWriter, req *http.Request) {
-		u, ok := request.UserFrom(req.Context())
-		if ok {
-			// Seemingly well-known headers to tell the upstream about user's identity
-			// so that the upstream can achieve the original goal of delegating RBAC authn/authz to kube-rbac-proxy
-			req.Header.Set(cfg.UserFieldName, u.GetName())
-			req.Header.Set(cfg.GroupsFieldName, strings.Join(u.GetGroups(), cfg.GroupSeparator))
+		req.Header.Del(cfg.UserFieldName)
+		req.Header.Del(cfg.GroupsFieldName)
+		for key := range req.Header {
+			if strings.HasPrefix(strings.ToLower(key), "x-remote-extra-") {
+				req.Header.Del(key)
+			}
+		}
+
+		if cfg.Enabled {
+			if u, ok := request.UserFrom(req.Context()); ok {
+				req.Header.Set(cfg.UserFieldName, u.GetName())
+				req.Header.Set(cfg.GroupsFieldName, strings.Join(u.GetGroups(), cfg.GroupSeparator))
+			}
 		}
 
 		handler.ServeHTTP(w, req)

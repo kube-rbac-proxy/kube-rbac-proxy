@@ -288,9 +288,16 @@ func Run(cfg *completedProxyRunOptions) error {
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		cleaned := path.Clean(req.URL.Path)
+		if cleaned != req.URL.Path {
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+
 		ignorePathFound := false
 		for _, pathIgnored := range cfg.ignorePaths {
-			ignorePathFound, err = path.Match(pathIgnored, req.URL.Path)
+			var err error
+			ignorePathFound, err = path.Match(pathIgnored, cleaned)
 			if err != nil {
 				http.Error(
 					w,
@@ -314,6 +321,14 @@ func Run(cfg *completedProxyRunOptions) error {
 			return
 		}
 
+		req.Header.Del("Authorization")
+		req.Header.Del(cfg.auth.Authentication.Header.UserFieldName)
+		req.Header.Del(cfg.auth.Authentication.Header.GroupsFieldName)
+		for key := range req.Header {
+			if strings.HasPrefix(strings.ToLower(key), "x-remote-extra-") {
+				req.Header.Del(key)
+			}
+		}
 		proxy.ServeHTTP(w, req)
 	})
 	handler = filters.WithAllowPaths(cfg.allowPaths, handler)

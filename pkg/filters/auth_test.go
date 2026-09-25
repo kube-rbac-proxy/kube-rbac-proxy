@@ -20,6 +20,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"strings"
 	"testing"
 
@@ -380,4 +381,142 @@ type testCase struct {
 	given
 	expected
 	description string
+}
+
+func TestWithAuthHeadersStripsInboundWhenDisabled(t *testing.T) {
+	cfg := &authn.AuthnHeaderConfig{
+		Enabled:         false,
+		UserFieldName:   "X-Remote-User",
+		GroupsFieldName: "X-Remote-Groups",
+	}
+
+	var gotUser, gotGroups string
+	inner := func(w http.ResponseWriter, r *http.Request) {
+		gotUser = r.Header.Get("X-Remote-User")
+		gotGroups = r.Header.Get("X-Remote-Groups")
+	}
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	req.Header.Set("X-Remote-User", "spoofed-admin")
+	req.Header.Set("X-Remote-Groups", "system:masters")
+
+	rec := httptest.NewRecorder()
+	filters.WithAuthHeaders(cfg, inner).ServeHTTP(rec, req)
+
+	if gotUser != "" {
+		t.Errorf("inbound X-Remote-User not stripped when auth-headers disabled: got %q", gotUser)
+	}
+	if gotGroups != "" {
+		t.Errorf("inbound X-Remote-Groups not stripped when auth-headers disabled: got %q", gotGroups)
+	}
+}
+
+func TestWithAuthHeadersStripsExtraHeaders(t *testing.T) {
+	cfg := &authn.AuthnHeaderConfig{
+		Enabled:         true,
+		UserFieldName:   "X-Remote-User",
+		GroupsFieldName: "X-Remote-Groups",
+	}
+
+	var gotExtra string
+	inner := func(w http.ResponseWriter, r *http.Request) {
+		gotExtra = r.Header.Get("X-Remote-Extra-Scopes")
+	}
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	req.Header.Set("X-Remote-Extra-Scopes", "admin:full")
+
+	rec := httptest.NewRecorder()
+	filters.WithAuthHeaders(cfg, inner).ServeHTTP(rec, req)
+
+	if gotExtra != "" {
+		t.Errorf("inbound X-Remote-Extra-Scopes not stripped: got %q", gotExtra)
+	}
+}
+
+func TestIgnorePathStripsAuthorizationHeader(t *testing.T) {
+	var upstreamAuthHeader string
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamAuthHeader = r.Header.Get("Authorization")
+	})
+
+	handler := buildIgnorePathHandler([]string{"/healthz"}, &authn.AuthnHeaderConfig{
+		UserFieldName:   "X-Remote-User",
+		GroupsFieldName: "X-Remote-Groups",
+	}, upstream)
+
+	req := httptest.NewRequest("GET", "/healthz", nil)
+	req.Header.Set("Authorization", "Bearer sa-token-prometheus-k8s")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if upstreamAuthHeader != "" {
+		t.Errorf("Authorization header forwarded to upstream on ignore-path: got %q, want empty", upstreamAuthHeader)
+	}
+}
+
+func TestIgnorePathStripsIdentityHeaders(t *testing.T) {
+	var gotUser, gotGroups string
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser = r.Header.Get("X-Remote-User")
+		gotGroups = r.Header.Get("X-Remote-Groups")
+	})
+
+	handler := buildIgnorePathHandler([]string{"/healthz"}, &authn.AuthnHeaderConfig{
+		UserFieldName:   "X-Remote-User",
+		GroupsFieldName: "X-Remote-Groups",
+	}, upstream)
+
+	req := httptest.NewRequest("GET", "/healthz", nil)
+	req.Header.Set("X-Remote-User", "system:admin")
+	req.Header.Set("X-Remote-Groups", "system:masters")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if gotUser != "" {
+		t.Errorf("X-Remote-User forwarded to upstream on ignore-path: got %q", gotUser)
+	}
+	if gotGroups != "" {
+		t.Errorf("X-Remote-Groups forwarded to upstream on ignore-path: got %q", gotGroups)
+	}
+}
+
+// buildIgnorePathHandler replicates the ignore-path handler logic from
+// kube-rbac-proxy.go for isolated testing of header sanitization.
+func buildIgnorePathHandler(ignorePaths []string, headerCfg *authn.AuthnHeaderConfig, upstream http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		cleaned := path.Clean(req.URL.Path)
+		if cleaned != req.URL.Path {
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+
+		ignorePathFound := false
+		for _, pathIgnored := range ignorePaths {
+			found, err := path.Match(pathIgnored, cleaned)
+			if err != nil {
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			if found {
+				ignorePathFound = true
+				break
+			}
+		}
+
+		if !ignorePathFound {
+			http.NotFound(w, req)
+			return
+		}
+
+		req.Header.Del("Authorization")
+		req.Header.Del(headerCfg.UserFieldName)
+		req.Header.Del(headerCfg.GroupsFieldName)
+		for key := range req.Header {
+			if strings.HasPrefix(strings.ToLower(key), "x-remote-extra-") {
+				req.Header.Del(key)
+			}
+		}
+		upstream.ServeHTTP(w, req)
+	})
 }
