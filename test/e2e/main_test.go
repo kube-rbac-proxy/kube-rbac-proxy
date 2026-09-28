@@ -38,17 +38,18 @@ func Test(t *testing.T) {
 	}
 
 	tests := map[string]kubetest.TestSuite{
-		"Basics":             testBasics(client),
-		"H2CUpstream":        testH2CUpstream(client),
-		"ClientCertificates": testClientCertificates(client),
-		"TokenAudience":      testTokenAudience(client),
-		"AllowPath":          testAllowPathsRegexp(client),
-		"IgnorePath":         testIgnorePaths(client),
-		"TLS":                testTLS(client),
-		"StaticAuthorizer":   testStaticAuthorizer(client),
-		"HTTP2":              testHTTP2(client),
-		"Flags":              testFlags(client),
-		"TokenMasking":       testTokenMasking(client),
+		"Basics":                     testBasics(client),
+		"H2CUpstream":                testH2CUpstream(client),
+		"ClientCertificates":         testClientCertificates(client),
+		"TokenAudience":              testTokenAudience(client),
+		"AllowPath":                  testAllowPathsRegexp(client),
+		"IgnorePath":                 testIgnorePaths(client),
+		"TLS":                        testTLS(client),
+		"StaticAuthorizer":           testStaticAuthorizer(client),
+		"HTTP2":                      testHTTP2(client),
+		"Flags":                      testFlags(client),
+		"TokenMasking":               testTokenMasking(client),
+		"ResourceBoundAuthorization": testResourceBoundAuthorization(client),
 	}
 
 	for name, tc := range tests {

@@ -119,6 +119,24 @@ func createCerts(certCommonName string, createSignedCert createCertsFunc) (*core
 	return trustCM, certsSecret, nil
 }
 
+func CreateServiceAccount(client kubernetes.Interface, name string) Action {
+	return func(ctx *ScenarioContext) error {
+		_, err := client.CoreV1().ServiceAccounts(ctx.Namespace).Create(context.TODO(),
+			&corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{Name: name},
+			},
+			metav1.CreateOptions{},
+		)
+		if err != nil {
+			return err
+		}
+		ctx.AddCleanUp(func() error {
+			return client.CoreV1().ServiceAccounts(ctx.Namespace).Delete(context.TODO(), name, metav1.DeleteOptions{})
+		})
+		return nil
+	}
+}
+
 func CreatedManifests(client kubernetes.Interface, paths ...string) Action {
 	return func(ctx *ScenarioContext) error {
 		for _, path := range paths {
