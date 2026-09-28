@@ -44,6 +44,7 @@ type KRPTestConfig struct {
 	MountedConfigMaps       map[string]*corev1.ConfigMap   // mounts to /var/run/configMaps/<key>
 	SAClusterRoleBindings   map[string]*rbacv1.ClusterRole // maps local SA name to ClusterRole
 	UserClusterRoleBindings map[string]*rbacv1.ClusterRole // maps user name to ClusterRole
+	SARoleBindings          map[string]*rbacv1.Role        // maps local SA name to Role
 
 	setupErrors []error
 }
@@ -61,6 +62,7 @@ func NewBasicKubeRBACProxyTestConfig() *KRPTestConfig {
 			"default":         testtemplates.GetMetricsRoleForClient(),
 		},
 		UserClusterRoleBindings: make(map[string]*rbacv1.ClusterRole),
+		SARoleBindings:          make(map[string]*rbacv1.Role),
 		MountedSecrets:          make(map[string]*corev1.Secret),
 		MountedConfigMaps:       make(map[string]*corev1.ConfigMap),
 	}
@@ -110,12 +112,31 @@ func (c *KRPTestConfig) WithAuthorizationConfigYAML(configYAML string) *KRPTestC
 }
 
 func (c *KRPTestConfig) AddSAClusterRoleBinding(saName string, clusterRole *rbacv1.ClusterRole) *KRPTestConfig {
+	if existing, ok := c.SAClusterRoleBindings[saName]; ok {
+		c.setupErrors = append(c.setupErrors, fmt.Errorf(
+			"SA %q already bound to cluster role %q, cannot also bind to %q",
+			saName, existing.Name, clusterRole.Name,
+		))
+		return c
+	}
 	c.SAClusterRoleBindings[saName] = clusterRole
 	return c
 }
 
 func (c *KRPTestConfig) AddUserClusterRoleBinding(userName string, clusterRole *rbacv1.ClusterRole) *KRPTestConfig {
 	c.UserClusterRoleBindings[userName] = clusterRole
+	return c
+}
+
+func (c *KRPTestConfig) AddSARoleBinding(saName string, role *rbacv1.Role) *KRPTestConfig {
+	if existing, ok := c.SARoleBindings[saName]; ok {
+		c.setupErrors = append(c.setupErrors, fmt.Errorf(
+			"SA %q already bound to role %q, cannot also bind to %q",
+			saName, existing.Name, role.Name,
+		))
+		return c
+	}
+	c.SARoleBindings[saName] = role
 	return c
 }
 
@@ -243,6 +264,17 @@ func (c *KRPTestConfig) Launch(client kubernetes.Interface) Action {
 			}
 		}
 
+		for saName, role := range c.SARoleBindings {
+			if role == nil {
+				continue
+			}
+			cleanup, err := bindToRole(context.TODO(), client, ctx.Namespace, saName, role)
+			ctx.AddCleanUp(cleanup)
+			if err != nil {
+				return err
+			}
+		}
+
 		_, err = client.CoreV1().Services(ctx.Namespace).Create(context.TODO(), testtemplates.GetKRPService(), metav1.CreateOptions{})
 		if err != nil {
 			return err
@@ -328,6 +360,53 @@ func bindToClusterRole(ctx context.Context, client kubernetes.Interface, namespa
 	}
 	cleanups = append(cleanups, func() error {
 		return ignoreNotFound(client.RbacV1().ClusterRoleBindings().Delete(ctx, crb.Name, metav1.DeleteOptions{}))
+	})
+
+	return cleanUp, nil
+}
+
+func bindToRole(ctx context.Context, client kubernetes.Interface, saNamespace, saName string, role *rbacv1.Role) (func() error, error) {
+	cleanups := []func() error{}
+	cleanUp := func() error {
+		errs := []error{}
+		for _, cleanup := range cleanups {
+			if err := cleanup(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return utilerrs.NewAggregate(errs)
+	}
+
+	_, err := client.RbacV1().Roles(role.Namespace).Create(ctx, role, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return cleanUp, err
+	}
+	cleanups = append(cleanups, func() error {
+		return ignoreNotFound(client.RbacV1().Roles(role.Namespace).Delete(ctx, role.Name, metav1.DeleteOptions{}))
+	})
+
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-%s", saName, role.Name),
+			Namespace: role.Namespace,
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "Role",
+			Name:     role.Name,
+		},
+		Subjects: []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      saName,
+			Namespace: saNamespace,
+		}},
+	}
+
+	if _, err := client.RbacV1().RoleBindings(role.Namespace).Create(ctx, rb, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return cleanUp, err
+	}
+	cleanups = append(cleanups, func() error {
+		return ignoreNotFound(client.RbacV1().RoleBindings(role.Namespace).Delete(ctx, rb.Name, metav1.DeleteOptions{}))
 	})
 
 	return cleanUp, nil

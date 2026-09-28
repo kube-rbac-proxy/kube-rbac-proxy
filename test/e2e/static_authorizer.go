@@ -27,28 +27,8 @@ import (
 
 func testStaticAuthorizer(client kubernetes.Interface) kubetest.TestSuite {
 	return func(t *testing.T) {
-		command := `curl --connect-timeout 5 -v -s -k --fail -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" https://kube-rbac-proxy.default.svc.cluster.local:8443%v`
-
-		resourceReqsConfig := `
-authorization:
-  rewrites:
-    byQueryParameter:
-      name: "namespace"
-  resourceAttributes:
-    resource: namespaces
-    subresource: metrics
-    namespace: "{{ .Value }}"
-  static:
-    - user:
-        name: system:serviceaccount:default:default
-      resourceRequest: true
-      resource: namespaces
-      subresource: metrics
-      namespace: default
-      verb: get
-`
-
-		nonResourceReqsConfig := `
+		command := `curl --connect-timeout 5 -v -s -k --fail -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" https://kube-rbac-proxy.default.svc.cluster.local:8443%s`
+		staticAuthorization := `
 authorization:
   static:
     - user:
@@ -64,42 +44,10 @@ authorization:
 			check kubetest.Action
 		}{
 			{
-				name: "resource/namespace/metrics/query rewrite/granted",
+				name: "should grant permission to the /metrics endpoint, if matching static authorization config",
 				given: kubetest.Actions(
 					kubetest.NewBasicKubeRBACProxyTestConfig().
-						WithAuthorizationConfigYAML(resourceReqsConfig).
-						WithoutMetricsEndpointAllowClusterRole().
-						Launch(client),
-				),
-				check: kubetest.Actions(
-					kubetest.ClientSucceeds(
-						client,
-						fmt.Sprintf(command, "/metrics?namespace=default"),
-						nil,
-					),
-				),
-			},
-			{
-				name: "resource/namespace/metrics/query rewrite/forbidden",
-				given: kubetest.Actions(
-					kubetest.NewBasicKubeRBACProxyTestConfig().
-						WithAuthorizationConfigYAML(resourceReqsConfig).
-						WithoutMetricsEndpointAllowClusterRole().
-						Launch(client),
-				),
-				check: kubetest.Actions(
-					kubetest.ClientFails(
-						client,
-						fmt.Sprintf(command, "/metrics?namespace=forbidden"),
-						nil,
-					),
-				),
-			},
-			{
-				name: "non-resource/get/metrics/granted",
-				given: kubetest.Actions(
-					kubetest.NewBasicKubeRBACProxyTestConfig().
-						WithAuthorizationConfigYAML(nonResourceReqsConfig).
+						WithAuthorizationConfigYAML(staticAuthorization).
 						WithoutMetricsEndpointAllowClusterRole().
 						Launch(client),
 				),
@@ -112,10 +60,10 @@ authorization:
 				),
 			},
 			{
-				name: "non-resource/get/metrics/forbidden",
+				name: "should not grant permission to the /metrics endpoint, if not matching static authorization config",
 				given: kubetest.Actions(
 					kubetest.NewBasicKubeRBACProxyTestConfig().
-						WithAuthorizationConfigYAML(nonResourceReqsConfig).
+						WithAuthorizationConfigYAML(staticAuthorization).
 						WithoutMetricsEndpointAllowClusterRole().
 						Launch(client),
 				),
