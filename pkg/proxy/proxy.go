@@ -62,7 +62,7 @@ func (n krpAuthorizerAttributesGetter) GetRequestAttributes(u user.Info, r *http
 	var allAttrs []authorizer.Attributes
 
 	defer func() {
-		for attrs := range allAttrs {
+		for _, attrs := range allAttrs {
 			klog.V(5).Infof("kube-rbac-proxy request attributes: attrs=%#+v", attrs)
 		}
 	}()
