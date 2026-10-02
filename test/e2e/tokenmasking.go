@@ -42,7 +42,6 @@ func testTokenMasking(client kubernetes.Interface) kubetest.TestSuite {
 
 			Given: kubetest.Actions(
 				kubetest.NewBasicKubeRBACProxyTestConfig().
-					UpdateFlags(map[string]string{"logtostderr": "true"}).
 					Launch(client),
 			),
 			When: kubetest.Actions(

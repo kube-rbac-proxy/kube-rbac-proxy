@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package app
+package options
 
 import (
 	"os"
@@ -26,7 +26,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func Test_parseAuthorizationConfigFile(t *testing.T) {
+func TestParseAuthorizationConfigFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "configfile.yaml")
 
@@ -56,27 +56,21 @@ func Test_parseAuthorizationConfigFile(t *testing.T) {
       verb: get`,
 			want: &authz.Config{
 				Rewrites: &authz.SubjectAccessReviewRewrites{
-					ByQueryParameter: &authz.QueryParameterRewriteConfig{
-						Name: "namespace",
-					},
+					ByQueryParameter: &authz.QueryParameterRewriteConfig{Name: "namespace"},
 				},
 				ResourceAttributes: &authz.ResourceAttributes{
 					Resource:    "namespaces",
 					Subresource: "metrics",
 					Namespace:   "{{ .Value }}",
 				},
-				Static: []authz.StaticAuthorizationConfig{
-					{
-						User: authz.UserConfig{
-							Name: "system:serviceaccount:default:default",
-						},
-						ResourceRequest: true,
-						Resource:        "namespaces",
-						Subresource:     "metrics",
-						Namespace:       "default",
-						Verb:            "get",
-					},
-				},
+				Static: []authz.StaticAuthorizationConfig{{
+					User:            authz.UserConfig{Name: "system:serviceaccount:default:default"},
+					ResourceRequest: true,
+					Resource:        "namespaces",
+					Subresource:     "metrics",
+					Namespace:       "default",
+					Verb:            "get",
+				}},
 			},
 		},
 		{
@@ -89,22 +83,19 @@ func Test_parseAuthorizationConfigFile(t *testing.T) {
       verb: get
       path: /metrics`,
 			want: &authz.Config{
-				Static: []authz.StaticAuthorizationConfig{
-					{
-						User: authz.UserConfig{
-							Name: "system:serviceaccount:default:default",
-						},
-						ResourceRequest: false,
-						Verb:            "get",
-						Path:            "/metrics",
-					},
-				},
+				Static: []authz.StaticAuthorizationConfig{{
+					User:            authz.UserConfig{Name: "system:serviceaccount:default:default"},
+					ResourceRequest: false,
+					Verb:            "get",
+					Path:            "/metrics",
+				}},
 			},
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := os.WriteFile(filePath, []byte(tt.fileContent), 0666); err != nil {
+			if err := os.WriteFile(filePath, []byte(tt.fileContent), 0o666); err != nil {
 				t.Fatalf("failed to write file: %v", err)
 			}
 
