@@ -40,7 +40,7 @@ metadata:
 spec:
   ports:
   - name: https
-    port: 8444
+    port: 8443
     targetPort: https
   selector:
     app: kube-rbac-proxy
@@ -68,14 +68,14 @@ spec:
       - name: kube-rbac-proxy
         image: quay.io/brancz/kube-rbac-proxy:KUBE_RBAC_PROXY_VERSION
         args:
-        - "--insecure-listen-address=0.0.0.0:8444"
+        - "--secure-listen-address=0.0.0.0:8443"
         - "--upstream=http://127.0.0.1:8081/"
         - "--logtostderr=true"
         - "--v=10"
         - "--oidc-issuer={ISSUER}"
         - "--oidc-clientID={CLIENT_ID}"
         ports:
-        - containerPort: 8444
+        - containerPort: 8443
           name: https
         securityContext:
           allowPrivilegeEscalation: false

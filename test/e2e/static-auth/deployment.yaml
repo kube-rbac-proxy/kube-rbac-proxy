@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kube-rbac-proxy
+  namespace: default
 spec:
   replicas: 1
   selector:
@@ -12,6 +13,8 @@ spec:
       labels:
         app: kube-rbac-proxy
     spec:
+      securityContext:
+        runAsUser: 65532
       serviceAccountName: kube-rbac-proxy
       containers:
         - name: kube-rbac-proxy
@@ -19,12 +22,22 @@ spec:
           args:
             - "--secure-listen-address=0.0.0.0:8443"
             - "--upstream=http://127.0.0.1:8081/"
+            - "--config-file=/etc/kube-rbac-proxy/config-file.yaml"
             - "--authentication-skip-lookup"
             - "--v=10"
           ports:
             - containerPort: 8443
               name: https
+          volumeMounts:
+            - name: config
+              mountPath: /etc/kube-rbac-proxy
+          securityContext:
+            allowPrivilegeEscalation: false
         - name: prometheus-example-app
-          image: quay.io/brancz/prometheus-example-app:v0.6.0
+          image: quay.io/brancz/prometheus-example-app:v0.1.0
           args:
             - "--bind=127.0.0.1:8081"
+      volumes:
+        - name: config
+          configMap:
+            name: kube-rbac-proxy

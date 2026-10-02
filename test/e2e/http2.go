@@ -74,8 +74,8 @@ func testHTTP2(client kubernetes.Interface) kubetest.TestSuite {
 
 			Given: kubetest.Actions(kubetest.NewBasicKubeRBACProxyTestConfig().
 				UpdateFlags(map[string]string{
-					"ignore-paths":  "/metrics,/api/v1/*",
-					"http2-disable": "true",
+					"ignore-paths":          "/metrics,/api/v1/*",
+					"disable-http2-serving": "true",
 				}).
 				Launch(client),
 			),

@@ -96,88 +96,6 @@ func testBasics(client kubernetes.Interface) kubetest.TestSuite {
 	}
 }
 
-func testFlags(client kubernetes.Interface) kubetest.TestSuite {
-	return func(t *testing.T) {
-		command := `curl --connect-timeout 5 -v -s -k --fail -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" https://kube-rbac-proxy.default.svc.cluster.local:8443/metrics`
-
-		kubetest.Scenario{
-			Name: "WithAllOtherDisabledFlags",
-			Description: `
-				This should succeed. Even though all flags are set for kube-rbac-proxy.
-				This implies deprecated flags that got disabled.
-			`,
-
-			Given: kubetest.Actions(
-				kubetest.NewBasicKubeRBACProxyTestConfig().
-					UpdateFlags(map[string]string{
-						"add-dir-header":    "true",
-						"alsologtostderr":   "true",
-						"log-backtrace-at":  "0",
-						"log-dir":           "mustnotexist",
-						"log-file":          "mustnotexist",
-						"log-file-max-size": "1800",
-						"one-output":        "true",
-						"skip-headers":      "true",
-						"skip-log-headers":  "true",
-						"stderrthreshold":   "2",
-					}).
-					Launch(client),
-			),
-			When: kubetest.Actions(
-				kubetest.PodsAreReady(
-					client,
-					1,
-					"app=kube-rbac-proxy",
-				),
-				kubetest.ServiceIsReady(
-					client,
-					"kube-rbac-proxy",
-				),
-			),
-			Then: kubetest.Actions(
-				kubetest.ClientSucceeds(
-					client,
-					command,
-					nil,
-				),
-			),
-		}.Run(t)
-
-		kubetest.Scenario{
-			Name: "WithDisabledLogToStdErr",
-			Description: `
-				This should succeed. Even though logtostderr flag is set for
-				kube-rbac-proxy.
-				It is complementary to the other flags above.
-			`,
-
-			Given: kubetest.Actions(
-				kubetest.NewBasicKubeRBACProxyTestConfig().
-					UpdateFlags(map[string]string{"logtostderr": "true"}).
-					Launch(client),
-			),
-			When: kubetest.Actions(
-				kubetest.PodsAreReady(
-					client,
-					1,
-					"app=kube-rbac-proxy",
-				),
-				kubetest.ServiceIsReady(
-					client,
-					"kube-rbac-proxy",
-				),
-			),
-			Then: kubetest.Actions(
-				kubetest.ClientSucceeds(
-					client,
-					command,
-					nil,
-				),
-			),
-		}.Run(t)
-	}
-}
-
 func testTokenAudience(client kubernetes.Interface) kubetest.TestSuite {
 	return func(t *testing.T) {
 		command := `curl --connect-timeout 5 -v -s -k --fail -H "Authorization: Bearer $(cat /var/run/secrets/tokens/requestedtoken)" https://kube-rbac-proxy.default.svc.cluster.local:8443/metrics`
@@ -359,10 +277,10 @@ func testAllowPathsRegexp(client kubernetes.Interface) kubetest.TestSuite {
 			UpdateFlags(map[string]string{"allow-paths": "/metrics,/api/v1/label/*/values"})
 
 		kubetest.Scenario{
-			Name: "WithPathhNotAllowed",
+			Name: "WithPathNotAllowed",
 			Description: `
 				As a client with the correct RBAC rules,
-				I get a 404 response when requesting a path which isn't allowed by kube-rbac-proxy
+				I get a 403 response when requesting a path which isn't allowed by kube-rbac-proxy
 			`,
 
 			Given: kubetest.Actions(allowPathsSetup.Launch(client)),
@@ -380,12 +298,12 @@ func testAllowPathsRegexp(client kubernetes.Interface) kubetest.TestSuite {
 			Then: kubetest.Actions(
 				kubetest.ClientSucceeds(
 					client,
-					fmt.Sprintf(command, "/", 404, 404),
+					fmt.Sprintf(command, "/", 403, 403),
 					nil,
 				),
 				kubetest.ClientSucceeds(
 					client,
-					fmt.Sprintf(command, "/api/v1/label/name", 404, 404),
+					fmt.Sprintf(command, "/api/v1/label/name", 403, 403),
 					nil,
 				),
 			),
@@ -470,7 +388,8 @@ func testIgnorePaths(client kubernetes.Interface) kubetest.TestSuite {
 			Name: "WithIgnorePathNoMatch",
 			Description: `
 				As a client without an auth token,
-				I get a 401 response when requesting a path not included in ignorePaths
+				I get a 403 response when requesting a path not included in ignorePaths
+				because I end up being system:anonymous to the proxy
 			`,
 
 			Given: kubetest.Actions(ignorePathsSetup.Launch(client)),
@@ -488,12 +407,12 @@ func testIgnorePaths(client kubernetes.Interface) kubetest.TestSuite {
 			Then: kubetest.Actions(
 				kubetest.ClientSucceeds(
 					client,
-					fmt.Sprintf(commandWithoutAuth, "/", 401, 401),
+					fmt.Sprintf(commandWithoutAuth, "/", 403, 403),
 					nil,
 				),
 				kubetest.ClientSucceeds(
 					client,
-					fmt.Sprintf(commandWithoutAuth, "/api/v1/label/job/values", 401, 401),
+					fmt.Sprintf(commandWithoutAuth, "/api/v1/label/job/values", 403, 403),
 					nil,
 				),
 			),

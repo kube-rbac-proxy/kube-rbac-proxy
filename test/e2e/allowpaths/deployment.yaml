@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kube-rbac-proxy
+  namespace: default
 spec:
   replicas: 1
   selector:
@@ -18,13 +19,22 @@ spec:
           image: quay.io/brancz/kube-rbac-proxy:local
           args:
             - "--secure-listen-address=0.0.0.0:8443"
+            - "--proxy-endpoints-port=8643"
             - "--upstream=http://127.0.0.1:8081/"
+            - "--allow-paths=/metrics,/api/v1/label/*/values"
             - "--authentication-skip-lookup"
             - "--v=10"
           ports:
             - containerPort: 8443
               name: https
+            - containerPort: 8643
+              name: proxy
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              port: 8643
+              path: healthz
         - name: prometheus-example-app
-          image: quay.io/brancz/prometheus-example-app:v0.6.0
+          image: quay.io/brancz/prometheus-example-app:v0.1.0
           args:
             - "--bind=127.0.0.1:8081"
