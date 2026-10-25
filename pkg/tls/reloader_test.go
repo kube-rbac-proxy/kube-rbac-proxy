@@ -90,7 +90,7 @@ func TestReloader(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := &scenario{}
+			s := &scenario{tmpDir: t.TempDir()}
 
 			tc.given(t, s)
 
@@ -128,6 +128,7 @@ type scenario struct {
 	certPath, keyPath string
 	reloader          *CertReloader
 	cleanups          []func()
+	tmpDir            string
 }
 
 type stepFunc func(*testing.T, *scenario)
@@ -226,15 +227,15 @@ func doubleSymlinkCert(t *testing.T, s *scenario) {
 		t.Fatal(err)
 	}
 
-	keysdir := path.Join(os.TempDir(), "keys")
+	keysdir := path.Join(s.tmpDir, "keys")
 	if err := os.Symlink(name, keysdir); err != nil {
 		t.Fatal(err)
 	}
 
-	keyLink := path.Join(os.TempDir(), "key")
+	keyLink := path.Join(s.tmpDir, "key")
 	_ = os.Symlink(path.Join(keysdir, "key"), keyLink)
 
-	certLink := path.Join(os.TempDir(), "cert")
+	certLink := path.Join(s.tmpDir, "cert")
 	_ = os.Symlink(path.Join(keysdir, "cert"), certLink)
 
 	s.keyPath = keyLink
@@ -280,18 +281,18 @@ func swapSymlink(t *testing.T, s *scenario) {
 		t.Fatal(err)
 	}
 
-	tmp := path.Join(os.TempDir(), "keys.tmp")
+	tmp := path.Join(s.tmpDir, "keys.tmp")
 	if err := os.Symlink(name, tmp); err != nil {
 		t.Fatal(err)
 	}
 
-	keysdir := path.Join(os.TempDir(), "keys")
+	keysdir := path.Join(s.tmpDir, "keys")
 	if err := os.Rename(tmp, keysdir); err != nil {
 		t.Fatal(err)
 	}
 
-	s.keyPath = path.Join(os.TempDir(), "key")
-	s.certPath = path.Join(os.TempDir(), "cert")
+	s.keyPath = path.Join(s.tmpDir, "key")
+	s.certPath = path.Join(s.tmpDir, "cert")
 
 	s.cleanups = append(s.cleanups, func() {
 		_ = os.Remove(keyPath)
