@@ -132,8 +132,8 @@ type completedProxyRunOptions struct {
 	upstreamForceH2C bool
 	upstreamCABundle *x509.CertPool
 
-	http2Disable   bool
-	http2Config func() *http.HTTP2Config
+	http2Disable bool
+	http2Config  func() *http.HTTP2Config
 
 	auth *proxy.Config
 	tls  *options.TLSConfig
@@ -204,10 +204,10 @@ func Complete(o *options.ProxyRunOptions) (*completedProxyRunOptions, error) {
 	completed.http2Disable = o.HTTP2Disable
 	completed.http2Config = func() *http.HTTP2Config {
 		return &http.HTTP2Config{
-			MaxConcurrentStreams:           int(o.HTTP2MaxConcurrentStreams),
-			MaxReadFrameSize:               int(o.HTTP2MaxSize),
-			MaxReceiveBufferPerStream:      int(o.HTTP2MaxSize),
-			MaxReceiveBufferPerConnection:  int(o.HTTP2MaxSize) * int(o.HTTP2MaxConcurrentStreams),
+			MaxConcurrentStreams:          int(o.HTTP2MaxConcurrentStreams),
+			MaxReadFrameSize:              int(o.HTTP2MaxSize),
+			MaxReceiveBufferPerStream:     int(o.HTTP2MaxSize),
+			MaxReceiveBufferPerConnection: int(o.HTTP2MaxSize) * int(o.HTTP2MaxConcurrentStreams),
 		}
 	}
 
@@ -320,8 +320,11 @@ func Run(cfg *completedProxyRunOptions) error {
 	{
 		if cfg.secureListenAddress != "" {
 			srv := &http.Server{
-				Handler:     mux,
-				TLSConfig:   &tls.Config{},
+				Handler:   mux,
+				TLSConfig: &tls.Config{},
+				// Replaces x/net http2.Server.IdleTimeout. stdlib HTTP/2 uses
+				// Server.IdleTimeout for its connection idle timer (GOAWAY after
+				// no streams); SendPingTimeout only liveness-pings active-idle conns.
 				IdleTimeout: 90 * time.Second,
 			}
 
@@ -393,6 +396,10 @@ func Run(cfg *completedProxyRunOptions) error {
 				srv.TLSConfig.NextProtos = []string{"http/1.1"}
 			} else {
 				srv.HTTP2 = cfg.http2Config()
+				// srv.Serve with a pre-created TLS listener requires "h2" to already
+				// be in NextProtos — it doesn't get added automatically like with
+				// ListenAndServeTLS/ServeTLS.
+				srv.TLSConfig.NextProtos = append(srv.TLSConfig.NextProtos, "h2", "http/1.1")
 			}
 
 			gr.Add(func() error {
@@ -419,6 +426,8 @@ func Run(cfg *completedProxyRunOptions) error {
 				proxyEndpointsSrv := &http.Server{
 					Handler:   proxyEndpointsMux,
 					TLSConfig: srv.TLSConfig.Clone(),
+					// See srv.IdleTimeout comment above.
+					IdleTimeout: 90 * time.Second,
 				}
 
 				if cfg.http2Disable {
@@ -433,6 +442,9 @@ func Run(cfg *completedProxyRunOptions) error {
 					proxyEndpointsSrv.TLSConfig.NextProtos = []string{"http/1.1"}
 				} else {
 					proxyEndpointsSrv.HTTP2 = cfg.http2Config()
+					// Assigned, not appended: srv.TLSConfig.Clone() above already carries the
+					// "h2"/"http/1.1" entries appended to srv; append would duplicate them.
+					proxyEndpointsSrv.TLSConfig.NextProtos = []string{"h2", "http/1.1"}
 				}
 
 				gr.Add(func() error {
@@ -462,7 +474,10 @@ func Run(cfg *completedProxyRunOptions) error {
 	}
 	{
 		if cfg.insecureListenAddress != "" {
-			srv := &http.Server{}
+			srv := &http.Server{
+				// See srv.IdleTimeout comment in the secure-listener block above.
+				IdleTimeout: 90 * time.Second,
+			}
 			srv.Handler = mux
 			if !cfg.http2Disable {
 				var p http.Protocols
