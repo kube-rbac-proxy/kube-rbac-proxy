@@ -39,6 +39,7 @@ TOOLS_BIN_DIR?=$(shell pwd)/tmp/bin
 export PATH := $(TOOLS_BIN_DIR):$(PATH)
 
 EMBEDMD_BINARY=$(TOOLS_BIN_DIR)/embedmd
+GOLANGCI_LINT_BINARY=$(TOOLS_BIN_DIR)/golangci-lint
 TOOLING=$(EMBEDMD_BINARY)
 
 check-license:
@@ -106,6 +107,14 @@ grpcc-container:
 test-container: $(OUT_DIR)/$(PROGRAM_NAME)-linux-$(GOARCH) Dockerfile
 	docker build --build-arg BINARY=$(PROGRAM_NAME)-linux-$(GOARCH) --build-arg BASEIMAGE=$(BASEIMAGE) -t $(CONTAINER_NAME) .
 
+lint: $(GOLANGCI_LINT_BINARY)
+	go mod tidy && git diff --exit-code -U0 go.mod go.sum
+	$(GOLANGCI_LINT_BINARY) run
+
+$(GOLANGCI_LINT_BINARY): $(TOOLS_BIN_DIR)
+	@echo Installing golangci-lint
+	@GOBIN=$(TOOLS_BIN_DIR) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+
 test: test-unit test-e2e
 
 test-unit:
@@ -140,4 +149,4 @@ $(TOOLING): $(TOOLS_BIN_DIR)
 	@echo Installing tools from scripts/tools.go
 	@cat scripts/tools.go | grep _ | awk -F'"' '{print $$2}' | GOBIN=$(TOOLS_BIN_DIR) xargs -tI % go install -mod=readonly -modfile=scripts/go.mod %
 
-.PHONY: all check-license crossbuild build container push push-% manifest-push curl-container test test-unit test-e2e generate update-go-deps clean kind-delete-cluster kind-create-cluster
+.PHONY: all check-license crossbuild build container push push-% manifest-push curl-container lint test test-unit test-e2e generate update-go-deps clean kind-delete-cluster kind-create-cluster
