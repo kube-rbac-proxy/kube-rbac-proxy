@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+data:
+  server.conf: |+
+    server {
+        listen 8443 ssl;
+        server_name upstream-nginx;
+
+        ssl_certificate /etc/nginx/certs/tls.crt;
+        ssl_certificate_key /etc/nginx/certs/tls.key;
+        ssl_client_certificate /etc/nginx/client-ca/ca.crt;
+        ssl_verify_client on;
+
+        error_log /dev/stderr debug;
+
+        location /metrics {
+            add_header Content-Type text/plain;
+            return 200 'metrics endpoint reached\n';
+        }
+    }

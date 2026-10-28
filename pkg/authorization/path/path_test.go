@@ -23,8 +23,8 @@ import (
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 )
 
-func TestAllowPath(t *testing.T) {
-	validPath := "/allowed/path/withsuffix"
+func TestIgnorePath(t *testing.T) {
+	requestPath := "/allowed/path/with/suffix"
 
 	for _, tt := range []struct {
 		name        string
@@ -33,42 +33,116 @@ func TestAllowPath(t *testing.T) {
 		expectError bool
 	}{
 		{
-			name:     "should let request through if path allowed",
-			paths:    []string{validPath},
+			name:     "should authorize attributes, if path is identical",
+			paths:    []string{requestPath},
+			decision: authorizer.DecisionAllow,
+		},
+		{
+			name:     "should authorize attributes, if path matches with postfix wildcard",
+			paths:    []string{"/allowed/*"},
+			decision: authorizer.DecisionAllow,
+		},
+		{
+			name:     "should authorize attributes, if path matches with generous postfix wildcard",
+			paths:    []string{"/a*"},
+			decision: authorizer.DecisionAllow,
+		},
+		{
+			name:     "shouldn't authorize attributes, if path matches without trailing slash",
+			paths:    []string{"/allowed/path/with/suffix/*"},
 			decision: authorizer.DecisionNoOpinion,
 		},
 		{
-			name:     "should let request through if path allowed by wildcard",
-			paths:    []string{"/allowed/*/withsuffix"},
-			decision: authorizer.DecisionNoOpinion,
+			name:        "should fail on initialization with infix wildcard",
+			paths:       []string{"/allowed/*/withsuffix"},
+			expectError: true,
 		},
 		{
-			name:     "should not let request through if path not allowed",
+			name:     "should not authorize attributes, if path doesn't match",
 			paths:    []string{"/denied"},
-			decision: authorizer.DecisionDeny,
+			decision: authorizer.DecisionNoOpinion,
 		},
 		{
-			name:     "should let request through if no path specified",
+			name:     "should not authorize attributes, if no path specified",
 			paths:    []string{},
 			decision: authorizer.DecisionNoOpinion,
 		},
 		{
-			name:        "should not let request through if path is non-sense",
-			paths:       []string{"[]a]/*"},
-			decision:    authorizer.DecisionNoOpinion,
-			expectError: true,
+			name:     "should not authorize attributes, if no path specified",
+			paths:    []string{"/all?wed/path/with/suffix"},
+			decision: authorizer.DecisionNoOpinion,
 		},
 	} {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			authz := path.NewAllowPathAuthorizer(tt.paths)
-			decision, _, err := authz.Authorize(context.Background(), authorizer.AttributesRecord{
-				Path: validPath,
+			authz, err := path.NewPassthroughAuthorizer(tt.paths)
+			if err != nil && !tt.expectError {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if err == nil && tt.expectError {
+				t.Fatalf("expected error, got none")
+			}
+			if tt.expectError {
+				return
+			}
+
+			decision, _, _ := authz.Authorize(context.Background(), authorizer.AttributesRecord{
+				Path: requestPath,
 			})
 
-			if (err != nil) != tt.expectError {
-				t.Fatalf("expected error: %v; got: %v", tt.expectError, err)
+			if decision != tt.decision {
+				t.Fatalf("expected decision %v, got %v", tt.decision, decision)
 			}
+		})
+	}
+}
+
+func TestAllowPath(t *testing.T) {
+	requestPath := "/allowed/path/with/suffix"
+
+	for _, tt := range []struct {
+		name        string
+		paths       []string
+		decision    authorizer.Decision
+		expectError bool
+	}{
+		{
+			name:     "should let attributes through to next authorizer, if path allowed",
+			paths:    []string{requestPath},
+			decision: authorizer.DecisionNoOpinion,
+		},
+		{
+			name:     "should let attributes through to next authorizer with postfix wildcard",
+			paths:    []string{"/allowed/path/*"},
+			decision: authorizer.DecisionNoOpinion,
+		},
+		{
+			name:        "should not let attributes through to next authorizer with infix wildcard",
+			paths:       []string{"/allowed/*/with/suffix"},
+			expectError: true,
+		},
+		{
+			name:     "should not let attributes through to next authorizer, if path not allowed",
+			paths:    []string{"/denied"},
+			decision: authorizer.DecisionDeny,
+		},
+	} {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			authz, err := path.NewAllowedPathsAuthorizer(tt.paths)
+			if err != nil && !tt.expectError {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if err == nil && tt.expectError {
+				t.Fatalf("expected error, got none")
+			}
+			if tt.expectError {
+				return
+			}
+
+			decision, _, _ := authz.Authorize(context.Background(), authorizer.AttributesRecord{
+				Path: requestPath,
+			})
 
 			if decision != tt.decision {
 				t.Errorf("want: %d\nhave: %d\n", tt.decision, decision)

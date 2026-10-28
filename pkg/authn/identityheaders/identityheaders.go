@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/klog/v2"
 )
 
 // AuthnHeaderConfig contains authentication header settings which enable more information about the user identity to be sent to the upstream
@@ -38,20 +39,47 @@ type AuthnHeaderConfig struct {
 // WithAuthHeaders adds identity information to the headers.
 // Must not be used, if connection is not encrypted with TLS.
 func WithAuthHeaders(handler http.Handler, cfg *AuthnHeaderConfig) http.Handler {
-	upstreamHeadersEnabled := len(cfg.GroupsFieldName) > 0 || len(cfg.UserFieldName) > 0
-	if !upstreamHeadersEnabled {
+	if !HasIdentityHeadersEnabled(cfg) {
 		return handler
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// We don't want the client to impersonate someone else.
+		req.Header.Del(cfg.UserFieldName)
+		req.Header.Del(cfg.GroupsFieldName)
+
 		u, ok := request.UserFrom(req.Context())
 		if ok {
 			// Seemingly well-known headers to tell the upstream about user's identity
 			// so that the upstream can achieve the original goal of delegating RBAC authn/authz to kube-rbac-proxy
 			req.Header.Set(cfg.UserFieldName, u.GetName())
-			req.Header.Set(cfg.GroupsFieldName, strings.Join(u.GetGroups(), cfg.GroupSeparator))
+
+			if cfg.GroupSeparator == "" {
+				for _, group := range u.GetGroups() {
+					req.Header.Add(cfg.GroupsFieldName, group)
+				}
+			} else {
+				filteredGroups := filterGroups(u.GetGroups(), cfg.GroupSeparator)
+				req.Header.Set(cfg.GroupsFieldName, strings.Join(filteredGroups, cfg.GroupSeparator))
+			}
 		}
 
 		handler.ServeHTTP(w, req)
 	})
+}
+
+func HasIdentityHeadersEnabled(cfg *AuthnHeaderConfig) bool {
+	return len(cfg.GroupsFieldName) > 0 || len(cfg.UserFieldName) > 0
+}
+
+func filterGroups(groups []string, separator string) []string {
+	var validGroups []string
+	for _, group := range groups {
+		if strings.Contains(group, separator) {
+			klog.Infof("Dropping group %q because it contains the group separator %q", group, separator)
+			continue
+		}
+		validGroups = append(validGroups, group)
+	}
+	return validGroups
 }

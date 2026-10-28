@@ -29,6 +29,27 @@ An update of Kubernetes from v0.25.2 to v0.25.5 was rolled back as it removed th
 
 ## Usage
 
+### Migration guide from previous kube-rbac-proxy versions
+
+To get kube-rbac-proxy accepted as an official Kubernetes SIG Auth repository, we had to rewrite much of the original code. While this was hugely benefitial to the project itself, it brought breaking changes in terms of availability of some options. The changes in options were as follows:
+
+#### No longer available:
+- `--insecure-listen-addres` - the proxy is handling authentication information and will no longer run in an unsafe mode
+- `--auth-header-fields-enabled` - its value is derived from at least one of `--auth-header-groups-field-name` or `--auth-header-user-field-name` being set
+- `--tls-reload-interval` - upstream Kubernetes TLS material is now being reloaded by Kubernetes upstream code which chooses its own reasonable defaults
+- **infix regex** for `--allow-paths` and `--ignore-paths` - the proxy now uses postfix matching with `*` as its sole wildcard operator, instead of infix matching with different wildcard operators:
+  - `/api/v1/*` matches now `/api/v1`, `/api/v1/foo` and `/api/v1/foo/bar`, **previously** it didn't match `/api/v1/foo/bar`.
+  - `/api/v1/*/values` creates an error on server startup, **previously** it matched `/api/v1/foo/values` and `/api/v1/bar/values`.
+  - details: [Allow Path and Ignore Path changes](docs/path.md)
+
+#### Replaced:
+- `--kubeconfig` - use `--authentication-kubeconfig` and `--authorization-kubeconfig` instead
+- `--secure-listen-address` - use a combination of `--bind-address` and `--secure-port`
+
+#### Changes in behavior:
+The proxy will now attempt to read the `kube-system/extension-apiserver-authentication` ConfigMap in order to be able to handle client certificate authentication (mTLS) via the cluster-wide trust. To prevent this, set `--authentication-skip-lookup`. If, on the other hand, this is a desirable behavior, you'll want to assign the `extension-apiserver-authentication-reader` role to the ServiceAccount running the proxy.
+
+### Options
 The kube-rbac-proxy has all [`glog`](https://github.com/golang/glog) flags for logging purposes. To use the kube-rbac-proxy there are a few flags you may want to set:
 
 * `--upstream`: This is the upstream you want to proxy to.
@@ -86,7 +107,6 @@ Delegating authentication flags:
 
 Delegating authorization flags:
 
-      --authorization-always-allow-paths strings                A list of HTTP paths to skip during authorization, i.e. these are authorized without contacting the 'core' kubernetes server. (default [/healthz,/readyz,/livez])
       --authorization-kubeconfig string                         kubeconfig file pointing at the 'core' kubernetes server with enough rights to create subjectaccessreviews.authorization.k8s.io.
       --authorization-webhook-cache-authorized-ttl duration     The duration to cache 'authorized' responses from the webhook authorizer. (default 10s)
       --authorization-webhook-cache-unauthorized-ttl duration   The duration to cache 'unauthorized' responses from the webhook authorizer. (default 10s)
@@ -98,15 +118,9 @@ Proxy flags:
       --auth-header-groups-field-separator string   The separator string used for concatenating multiple group names in a groups header field's value (default "|")
       --auth-header-user-field-name string          The name of the field inside a http(2) request header to tell the upstream server about the user's name (default "x-remote-user")
       --auth-token-audiences strings                Comma-separated list of token audiences to accept. By default a token does not have to have any specific audience. It is recommended to set a specific audience.
-      --config-file string                          Configuration file to configure kube-rbac-proxy.
+      --config-file string                          Configuration file to configure static and rewrites authorization of the kube-rbac-proxy.
+      --disable-http2-serving                       If true, HTTP2 serving will be disabled [default=false]
       --ignore-paths strings                        Comma-separated list of paths against which kube-rbac-proxy pattern-matches the incoming request. If the requst matches, it will proxy the request without performing an authentication or authorization check. Cannot be used with --allow-paths.
-      --oidc-ca-file string                         If set, the OpenID server's certificate will be verified by one of the authorities in the oidc-ca-file, otherwise the host's root CA set will be used.
-      --oidc-clientID string                        The client ID for the OpenID Connect client, must be set if oidc-issuer-url is set.
-      --oidc-groups-claim string                    Identifier of groups in JWT claim, by default set to 'groups' (default "groups")
-      --oidc-groups-prefix string                   If provided, all groups will be prefixed with this value to prevent conflicts with other authentication strategies.
-      --oidc-issuer string                          The URL of the OpenID issuer, only HTTPS scheme will be accepted. If set, it will be used to verify the OIDC JSON Web Token (JWT).
-      --oidc-sign-alg stringArray                   Supported signing algorithms, default RS256 (default [RS256])
-      --oidc-username-claim string                  Identifier of the user in JWT claim, by default set to 'email' (default "email")
       --proxy-endpoints-port int                    The port to securely serve proxy-specific endpoints (such as '/healthz'). Uses the host from the '--secure-listen-address'.
       --upstream string                             The upstream URL to proxy to once requests have successfully been authenticated and authorized.
       --upstream-ca-file string                     The CA the upstream uses for TLS connection. This is required when the upstream uses TLS and its own CA certificate
@@ -114,16 +128,59 @@ Proxy flags:
       --upstream-client-key-file string             The key matching the certificate from --upstream-client-cert-file. If set, requires --upstream-client-cert-file to be set, too.
       --upstream-force-h2c                          Force h2c to communicate with the upstream. This is required when the upstream speaks h2c(http/2 cleartext - insecure variant of http/2) only. For example, go-grpc server in the insecure mode, such as helm's tiller w/o TLS, speaks h2c only
 
-Legacy kube-rbac-proxy [DEPRECATED] flags:
+OIDC flags:
 
-      --kubeconfig string              Path to a kubeconfig file, specifying how to connect to the API server. If unset, in-cluster configuration will be used
-      --secure-listen-address string   The address the kube-rbac-proxy HTTPs server should listen on.
+      --oidc-ca-file string           If set, the OpenID server's certificate will be verified by one of the authorities in the oidc-ca-file, otherwise the host's root CA set will be used.
+      --oidc-groups-claim string      Identifier of groups in JWT claim, by default set to 'groups' (default "groups")
+      --oidc-groups-prefix string     If provided, all groups will be prefixed with this value to prevent conflicts with other authentication strategies.
+      --oidc-issuer string            The URL of the OpenID issuer, only HTTPS scheme will be accepted. If set, it will be used to verify the OIDC JSON Web Token (JWT).
+      --oidc-required-audience aud    The audience that must appear in all incoming tokens' aud claim. Must be set if `oidc-issuer` is configured.
+      --oidc-sign-alg stringArray     Supported signing algorithms, default RS256 (default [RS256])
+      --oidc-username-claim string    Identifier of the user in JWT claim, by default set to 'email' (default "email")
+      --oidc-username-prefix string   If provided, the username will be prefixed with this value to prevent conflicts with other authentication strategies.
 
 Global flags:
 
   -h, --help                     help for kube-rbac-proxy
       --version version[=true]   --version, --version=raw prints version information and quits; --version=vX.Y.Z... sets the reported version
 ```
+
+### Authorization configuration
+
+The format of the file accepted by the `--config-file` reads as follows:
+```yaml
+authorization:
+  static:
+  - user:
+      name: <string>
+      groups: [ <string> ]
+    verb: <string>
+    namespace: <string>
+    apiGroup: <string>
+    resource: <string>
+    subresource: <string>
+    name: <string>
+    resourceRequest: <bool>
+    path: <string>
+  resourceAttributes:
+    namespace: <string>
+    apiGroup: <string>
+    apiVersion: <string>
+    resource: <string>
+    subresource: <string>
+    name: <string>
+  rewrites:
+    byQueryParameter:
+      name: <string>
+    byHttpHeader:
+      name: <string>
+```
+
+The `authorization.static` is a YAML list, each element contains a set of attributes. kube-rbac-proxy translates incoming requests into kube-like authorization attributes that are checked against the list. If the request matches against any of the elements of the list, access is allowed.
+
+The `authorization.resourceAttributes` and `authorization.rewrites` set how authorization attributes retrieved from HTTP requests to the proxy should be presented in a `SubjectAccessReview` to the kube-apiserver:
+ - `resourceAttributes` will set the given fields while sending the SAR to the kube-apiserver, while the keeping the `verb` and `user` based on the HTTP request
+ - `rewrites` allows retrieving certain parameters from the incoming HTTP request and use them in the fields of `resourceAttributes` if these take the form of `{{ .Value }}`, thus allowing parametrization of the SAR sent to the kube-apiserver
 
 
 ### How to update Go dependencies

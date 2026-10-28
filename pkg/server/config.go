@@ -77,7 +77,8 @@ func NewConfig() *KubeRBACProxyConfig {
 // with a CA and/or client cert/key pair.
 // An empty string on `upstreamCAPath` means system cert pool will be used.
 func (i *KubeRBACProxyInfo) SetUpstreamTransport(upstreamCAPath, upstreamClientCertPath, upstreamClientKeyPath string) error {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := (http.DefaultTransport.(*http.Transport)).Clone()
+	transport.ForceAttemptHTTP2 = false
 
 	if len(upstreamCAPath) > 0 {
 		upstreamCAPEM, err := os.ReadFile(upstreamCAPath)
@@ -90,7 +91,6 @@ func (i *KubeRBACProxyInfo) SetUpstreamTransport(upstreamCAPath, upstreamClientC
 			return errors.New("error parsing upstream CA certificate")
 		}
 
-		transport.ForceAttemptHTTP2 = false
 		transport.TLSClientConfig = &tls.Config{RootCAs: upstreamCACertPool}
 	}
 
@@ -100,7 +100,6 @@ func (i *KubeRBACProxyInfo) SetUpstreamTransport(upstreamCAPath, upstreamClientC
 			return fmt.Errorf("failed to read upstream client cert/key: %w", err)
 		}
 
-		transport.ForceAttemptHTTP2 = false
 		if transport.TLSClientConfig == nil {
 			transport.TLSClientConfig = &tls.Config{}
 		}

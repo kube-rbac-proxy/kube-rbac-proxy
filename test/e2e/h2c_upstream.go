@@ -29,7 +29,43 @@ func testH2CUpstream(client kubernetes.Interface) kubetest.TestSuite {
 		command := `curl --connect-timeout 5 -v -s -k --fail -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" https://kube-rbac-proxy.default.svc.cluster.local:8443/metrics`
 
 		kubetest.Scenario{
-			Name: "With H2C Upstream",
+			Name: "With H2C non-local upstream",
+
+			Given: kubetest.Actions(
+				kubetest.CreatedManifests(
+					client,
+					"h2c-upstream/deployment-upstream-non-loopback.yaml",
+					"h2c-upstream/upstream-svc.yaml",
+				),
+				kubetest.NewBasicKubeRBACProxyTestConfig().
+					UpdateFlags(map[string]string{
+						"upstream-force-h2c": "true",
+						"upstream":           "http://http-echo-service.default.svc.cluster.local:80/",
+					}).
+					UpdateUpstreamFlags(map[string]string{"h2c": "true"}).
+					Launch(client),
+			),
+			When: kubetest.Actions(
+				kubetest.PodsAreReady(
+					client,
+					1,
+					"app=http-echo",
+				),
+				kubetest.ServiceIsReady(
+					client,
+					"http-echo-service",
+				),
+			),
+			Then: kubetest.Actions(
+				kubetest.PodIsCrashLoopBackOff(
+					client,
+					"kube-rbac-proxy",
+				),
+			),
+		}.Run(t)
+
+		kubetest.Scenario{
+			Name: "With H2C local upstream",
 
 			Given: kubetest.Actions(
 				kubetest.NewBasicKubeRBACProxyTestConfig().

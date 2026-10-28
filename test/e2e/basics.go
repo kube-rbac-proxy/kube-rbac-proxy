@@ -274,7 +274,7 @@ func testAllowPathsRegexp(client kubernetes.Interface) kubetest.TestSuite {
 		command := `STATUS_CODE=$(curl --connect-timeout 5 -o /dev/null -v -s -k --write-out "%%{http_code}" -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" https://kube-rbac-proxy.default.svc.cluster.local:8443%s); if [[ "$STATUS_CODE" != %d ]]; then echo "expecting %d status code, got $STATUS_CODE instead" > /proc/self/fd/2; exit 1; fi`
 
 		allowPathsSetup := kubetest.NewBasicKubeRBACProxyTestConfig().
-			UpdateFlags(map[string]string{"allow-paths": "/metrics,/api/v1/label/*/values"})
+			UpdateFlags(map[string]string{"allow-paths": "/metrics,/api/v1/label/*"})
 
 		kubetest.Scenario{
 			Name: "WithPathNotAllowed",
@@ -303,7 +303,7 @@ func testAllowPathsRegexp(client kubernetes.Interface) kubetest.TestSuite {
 				),
 				kubetest.ClientSucceeds(
 					client,
-					fmt.Sprintf(command, "/api/v1/label/name", 403, 403),
+					fmt.Sprintf(command, "/api/v1", 403, 403),
 					nil,
 				),
 			),
@@ -378,7 +378,17 @@ func testIgnorePaths(client kubernetes.Interface) kubetest.TestSuite {
 				),
 				kubetest.ClientSucceeds(
 					client,
+					fmt.Sprintf(commandWithoutAuth, "/api/v1/", 200, 200),
+					nil,
+				),
+				kubetest.ClientSucceeds(
+					client,
 					fmt.Sprintf(commandWithoutAuth, "/api/v1/labels", 200, 200),
+					nil,
+				),
+				kubetest.ClientSucceeds(
+					client,
+					fmt.Sprintf(commandWithoutAuth, "/api/v1/label/values", 200, 200),
 					nil,
 				),
 			),
@@ -412,7 +422,12 @@ func testIgnorePaths(client kubernetes.Interface) kubetest.TestSuite {
 				),
 				kubetest.ClientSucceeds(
 					client,
-					fmt.Sprintf(commandWithoutAuth, "/api/v1/label/job/values", 403, 403),
+					fmt.Sprintf(commandWithoutAuth, "/api/v1", 403, 403),
+					nil,
+				),
+				kubetest.ClientSucceeds(
+					client,
+					fmt.Sprintf(commandWithoutAuth, "/api/v12", 403, 403),
 					nil,
 				),
 			),

@@ -17,6 +17,8 @@ limitations under the License.
 package options
 
 import (
+	"fmt"
+
 	"github.com/brancz/kube-rbac-proxy/pkg/authn"
 	"github.com/brancz/kube-rbac-proxy/pkg/authn/identityheaders"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
@@ -34,22 +36,25 @@ type ProxyRunOptions struct {
 	DelegatingAuthentication *genericoptions.DelegatingAuthenticationOptions
 	DelegatingAuthorization  *genericoptions.DelegatingAuthorizationOptions
 
-	ProxyOptions  *ProxyOptions
-	LegacyOptions *LegacyOptions
+	ProxyOptions *ProxyOptions
+	OIDCOptions  *OIDCOptions
 }
 
 func NewProxyRunOptions() *ProxyRunOptions {
+	// unset the always allow paths, the proxy has its own authorizer for these
+	delegatingAuthz := genericoptions.NewDelegatingAuthorizationOptions()
+	delegatingAuthz.AlwaysAllowPaths = nil
+
 	return &ProxyRunOptions{
 		SecureServing:            genericoptions.NewSecureServingOptions(),
 		DelegatingAuthentication: genericoptions.NewDelegatingAuthenticationOptions(),
-		DelegatingAuthorization:  genericoptions.NewDelegatingAuthorizationOptions(),
+		DelegatingAuthorization:  delegatingAuthz,
 
 		ProxyOptions: &ProxyOptions{
 			UpstreamHeader: &identityheaders.AuthnHeaderConfig{},
-			OIDC:           &authn.OIDCConfig{},
 		},
-		LegacyOptions: &LegacyOptions{
-			x509Auth: &authn.X509Config{},
+		OIDCOptions: &OIDCOptions{
+			OIDCConfig: &authn.OIDCConfig{},
 		},
 	}
 }
@@ -61,7 +66,20 @@ func (o *ProxyRunOptions) Flags() kubeflags.NamedFlagSets {
 	o.DelegatingAuthentication.AddFlags(namedFlagSets.FlagSet("delegating authentication"))
 	o.DelegatingAuthorization.AddFlags(namedFlagSets.FlagSet("delegating authorization"))
 	o.ProxyOptions.AddFlags(namedFlagSets.FlagSet("proxy"))
-	o.LegacyOptions.AddFlags(namedFlagSets.FlagSet("legacy kube-rbac-proxy [DEPRECATED]"))
+	o.OIDCOptions.AddFlags(namedFlagSets.FlagSet("OIDC"))
+
+	// we have our own handling of always allow paths
+	_ = namedFlagSets.FlagSets["delegating authorization"].MarkHidden("authorization-always-allow-paths")
 
 	return namedFlagSets
+}
+
+func (o *ProxyRunOptions) ExtraValidate() []error {
+	var errs []error
+
+	if len(o.DelegatingAuthorization.AlwaysAllowPaths) > 0 {
+		errs = append(errs, fmt.Errorf("--authorization-always-allow-paths cannot be set, see --allow-paths instead"))
+	}
+
+	return errs
 }

@@ -31,7 +31,7 @@ type TokenConfig struct {
 // OIDCConfig represents configuration used for JWT request authentication
 type OIDCConfig struct {
 	IssuerURL            string
-	ClientID             string
+	RequiredAudience     string
 	CAFile               string
 	UsernameClaim        string
 	UsernamePrefix       string

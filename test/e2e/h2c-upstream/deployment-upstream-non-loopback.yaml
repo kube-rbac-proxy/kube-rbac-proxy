@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: http-echo
+  labels:
+    app: http-echo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: http-echo
+  template:
+    metadata:
+      labels:
+        app: http-echo
+    spec:
+      containers:
+      - name: http-echo
+        image: mendhak/http-https-echo
+        env:
+        - name: HTTP_PORT
+          value: 8080
+        ports:
+        - containerPort: 8080

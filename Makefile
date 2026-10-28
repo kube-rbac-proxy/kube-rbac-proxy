@@ -90,6 +90,9 @@ manifest-push: manifest-tool
 
 push: crossbuild manifest-tool $(addprefix push-,$(ALL_ARCH)) manifest-push
 
+test-container: $(OUT_DIR)/$(PROGRAM_NAME)-linux-$(GOARCH) Dockerfile
+	docker build --build-arg BINARY=$(PROGRAM_NAME)-linux-$(GOARCH) --build-arg BASEIMAGE=$(BASEIMAGE) -t $(CONTAINER_NAME) .
+
 curl-container:
 	docker build -f ./examples/example-client/Dockerfile -t quay.io/brancz/krp-curl:v0.0.2 .
 
@@ -140,4 +143,4 @@ $(TOOLING): $(TOOLS_BIN_DIR)
 	@echo Installing tools from scripts/tools.go
 	@cat scripts/tools.go | grep _ | awk -F'"' '{print $$2}' | GOBIN=$(TOOLS_BIN_DIR) xargs -tI % go install -mod=readonly -modfile=scripts/go.mod %
 
-.PHONY: all check-license crossbuild build container push push-% manifest-push curl-container test test-unit test-e2e generate update-go-deps clean kind-delete-cluster kind-create-cluster
+.PHONY: all check-license crossbuild build container push push-% manifest-push test-container curl-container test test-unit test-e2e generate update-go-deps clean kind-delete-cluster kind-create-cluster

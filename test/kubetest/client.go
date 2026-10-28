@@ -16,8 +16,26 @@ limitations under the License.
 
 package kubetest
 
-import "k8s.io/client-go/kubernetes"
+import (
+	"k8s.io/client-go/kubernetes"
+)
 
+// ClientLogsContain returns an action that checks if the client logs contain
+// all of the given log entries.
+func ClientLogsContain(client kubernetes.Interface, command string, logEntries []string, opts *RunOptions) Action {
+	return func(ctx *ScenarioContext) error {
+		return RunHasLogEntry(
+			client,
+			"quay.io/brancz/krp-curl:v0.0.2",
+			"kube-rbac-proxy-client",
+			[]string{"/bin/sh", "-c", command},
+			logEntries,
+			opts,
+		)(ctx)
+	}
+}
+
+// ClientSucceeds returns an action that checks that the client has succeeded.
 func ClientSucceeds(client kubernetes.Interface, command string, opts *RunOptions) Action {
 	return func(ctx *ScenarioContext) error {
 		return RunSucceeds(
@@ -30,6 +48,7 @@ func ClientSucceeds(client kubernetes.Interface, command string, opts *RunOption
 	}
 }
 
+// ClientSucceeds returns an action that checks that the client has failed.
 func ClientFails(client kubernetes.Interface, command string, opts *RunOptions) Action {
 	return func(ctx *ScenarioContext) error {
 		return RunFails(

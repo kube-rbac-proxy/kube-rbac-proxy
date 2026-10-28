@@ -1,11 +1,11 @@
 /*
-Copyright 2017 Frederic Branczyk All rights reserved.
+Copyright 2023 the kube-rbac-proxy maintainers. All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,232 +13,164 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-
-package rewrite
+package rewrite_test
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
+	"errors"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-
+	"github.com/brancz/kube-rbac-proxy/pkg/authorization/rewrite"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
-	"k8s.io/apiserver/pkg/authorization/authorizerfactory"
 )
 
-func TestGeneratingAuthorizerAttributes(t *testing.T) {
-	cases := []struct {
-		desc     string
-		config   *RewriteAttributesConfig
-		req      *http.Request
-		expected []authorizer.Attributes
-	}{
-		{
-			"without resource attributes and rewrites",
-			&RewriteAttributesConfig{},
-			createRequest(nil, nil),
-			[]authorizer.Attributes{
+func TestRewritingAuthorizer(t *testing.T) {
+	simpleAttributesGenerator := &fakeAttributesGenerator{
+		generate: func(context.Context, authorizer.Attributes) []authorizer.Attributes {
+			return []authorizer.Attributes{
 				authorizer.AttributesRecord{
-					User:            nil,
-					Verb:            "get",
-					Namespace:       "",
-					APIGroup:        "",
-					APIVersion:      "",
-					Resource:        "",
-					Subresource:     "",
-					Name:            "",
-					ResourceRequest: false,
-					Path:            "/accounts",
+					Namespace:  "kube-system",
+					APIGroup:   "core",
+					APIVersion: "v1",
+					Resource:   "pods",
+					Name:       "kube-apiserver",
 				},
-			},
-		},
-		{
-			"without rewrites config",
-			&RewriteAttributesConfig{ResourceAttributes: &ResourceAttributes{Namespace: "tenant1", APIVersion: "v1", Resource: "namespace", Subresource: "metrics"}},
-			createRequest(nil, nil),
-			[]authorizer.Attributes{
-				authorizer.AttributesRecord{
-					User:            nil,
-					Verb:            "get",
-					Namespace:       "tenant1",
-					APIGroup:        "",
-					APIVersion:      "v1",
-					Resource:        "namespace",
-					Subresource:     "metrics",
-					Name:            "",
-					ResourceRequest: true,
-				},
-			},
-		},
-		{
-			"with query param rewrites config",
-			&RewriteAttributesConfig{
-				Rewrites:           &SubjectAccessReviewRewrites{ByQueryParameter: &QueryParameterRewriteConfig{Name: "namespace"}},
-				ResourceAttributes: &ResourceAttributes{Namespace: "{{ .Value }}", APIVersion: "v1", Resource: "namespace", Subresource: "metrics"},
-			},
-			createRequest(map[string][]string{"namespace": {"tenant1"}}, nil),
-			[]authorizer.Attributes{
-				authorizer.AttributesRecord{
-					User:            nil,
-					Verb:            "get",
-					Namespace:       "tenant1",
-					APIGroup:        "",
-					APIVersion:      "v1",
-					Resource:        "namespace",
-					Subresource:     "metrics",
-					Name:            "",
-					ResourceRequest: true,
-				},
-			},
-		},
-		{
-			"with query param rewrites config but missing URL query",
-			&RewriteAttributesConfig{
-				Rewrites:           &SubjectAccessReviewRewrites{ByQueryParameter: &QueryParameterRewriteConfig{Name: "namespace"}},
-				ResourceAttributes: &ResourceAttributes{Namespace: "{{ .Value }}", APIVersion: "v1", Resource: "namespace", Subresource: "metrics"},
-			},
-			createRequest(nil, nil),
-			nil,
-		},
-		{
-			"with http header rewrites config",
-			&RewriteAttributesConfig{
-				Rewrites:           &SubjectAccessReviewRewrites{ByHTTPHeader: &HTTPHeaderRewriteConfig{Name: "namespace"}},
-				ResourceAttributes: &ResourceAttributes{Namespace: "{{ .Value }}", APIVersion: "v1", Resource: "namespace", Subresource: "metrics"},
-			},
-			createRequest(nil, map[string][]string{"namespace": {"tenant1"}}),
-			[]authorizer.Attributes{
-				authorizer.AttributesRecord{
-					User:            nil,
-					Verb:            "get",
-					Namespace:       "tenant1",
-					APIGroup:        "",
-					APIVersion:      "v1",
-					Resource:        "namespace",
-					Subresource:     "metrics",
-					Name:            "",
-					ResourceRequest: true,
-				},
-			},
-		},
-		{
-			"with http header rewrites config and additional header",
-			&RewriteAttributesConfig{
-				Rewrites:           &SubjectAccessReviewRewrites{ByHTTPHeader: &HTTPHeaderRewriteConfig{Name: "namespace"}},
-				ResourceAttributes: &ResourceAttributes{Namespace: "{{ .Value }}", APIVersion: "v1", Resource: "namespace", Subresource: "metrics"},
-			},
-			createRequest(nil, map[string][]string{"namespace": {"tenant1", "tenant2"}}),
-			[]authorizer.Attributes{
-				authorizer.AttributesRecord{
-					User:            nil,
-					Verb:            "get",
-					Namespace:       "tenant1",
-					APIGroup:        "",
-					APIVersion:      "v1",
-					Resource:        "namespace",
-					Subresource:     "metrics",
-					Name:            "",
-					ResourceRequest: true,
-				},
-				authorizer.AttributesRecord{
-					User:            nil,
-					Verb:            "get",
-					Namespace:       "tenant2",
-					APIGroup:        "",
-					APIVersion:      "v1",
-					Resource:        "namespace",
-					Subresource:     "metrics",
-					Name:            "",
-					ResourceRequest: true,
-				},
-			},
-		},
-		{
-			"with http header rewrites config but missing header",
-			&RewriteAttributesConfig{
-				Rewrites:           &SubjectAccessReviewRewrites{ByQueryParameter: &QueryParameterRewriteConfig{Name: "namespace"}},
-				ResourceAttributes: &ResourceAttributes{Namespace: "{{ .Value }}", APIVersion: "v1", Resource: "namespace", Subresource: "metrics"},
-			},
-			createRequest(nil, nil),
-			nil,
-		},
-		{
-			"with http header and query param rewrites config",
-			&RewriteAttributesConfig{
-				Rewrites: &SubjectAccessReviewRewrites{
-					ByHTTPHeader:     &HTTPHeaderRewriteConfig{Name: "namespace"},
-					ByQueryParameter: &QueryParameterRewriteConfig{Name: "namespace"},
-				},
-				ResourceAttributes: &ResourceAttributes{Namespace: "{{ .Value }}", APIVersion: "v1", Resource: "namespace", Subresource: "metrics"},
-			},
-			createRequest(
-				map[string][]string{"namespace": {"tenant1"}},
-				map[string][]string{"namespace": {"tenant2"}},
-			),
-			[]authorizer.Attributes{
-				authorizer.AttributesRecord{
-					User:            nil,
-					Verb:            "get",
-					Namespace:       "tenant1",
-					APIGroup:        "",
-					APIVersion:      "v1",
-					Resource:        "namespace",
-					Subresource:     "metrics",
-					Name:            "",
-					ResourceRequest: true,
-				},
-				authorizer.AttributesRecord{
-					User:            nil,
-					Verb:            "get",
-					Namespace:       "tenant2",
-					APIGroup:        "",
-					APIVersion:      "v1",
-					Resource:        "namespace",
-					Subresource:     "metrics",
-					Name:            "",
-					ResourceRequest: true,
-				},
-			},
+			}
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.desc, func(t *testing.T) {
-			t.Log(c.req.URL.Query())
-			n := rewritingAuthorizer{delegate: authorizerfactory.NewAlwaysAllowAuthorizer(), config: c.config}
-			res := n.getKubeRBACProxyAuthzAttributes(
-				WithKubeRBACProxyParams(context.Background(), requestToParams(c.config, c.req)),
+	rewriteAttributesGenerator := &fakeAttributesGenerator{
+		generate: func(context.Context, authorizer.Attributes) []authorizer.Attributes {
+			return []authorizer.Attributes{
 				authorizer.AttributesRecord{
-					Verb:            "get",
-					Path:            "/accounts",
-					ResourceRequest: false,
-				})
-			if !cmp.Equal(res, c.expected) {
-				t.Errorf("Generated authorizer attributes are not correct. Expected %v, recieved %v", c.expected, res)
+					Namespace:  "kube-system",
+					APIGroup:   "core",
+					APIVersion: "v1",
+					Resource:   "pods",
+					Name:       "kube-apiserver",
+				},
+				authorizer.AttributesRecord{
+					Namespace:  "default",
+					APIGroup:   "core",
+					APIVersion: "v1",
+					Resource:   "pods",
+					Name:       "kube-apiserver",
+				},
+			}
+		},
+	}
+
+	alternatingFunc := func() func(context.Context, authorizer.Attributes) (authorizer.Decision, string, error) {
+		count := 0
+
+		return func(context.Context, authorizer.Attributes) (authorizer.Decision, string, error) {
+			count = count + 1
+			if count%2 != 0 {
+				return authorizer.DecisionAllow, "", nil
+			}
+
+			return authorizer.DecisionDeny, "", nil
+		}
+	}
+
+	testCases := []struct {
+		name     string
+		delegate authorizer.Authorizer
+		attrGen  rewrite.AttributesGenerator
+		expected authorizer.Decision
+	}{
+		{
+			name:     "nil attributes",
+			delegate: nil,
+			attrGen: &fakeAttributesGenerator{
+				generate: func(context.Context, authorizer.Attributes) []authorizer.Attributes {
+					return nil
+				},
+			},
+			expected: authorizer.DecisionDeny,
+		},
+		{
+			name:     "empty attributes",
+			delegate: nil,
+			attrGen: &fakeAttributesGenerator{
+				generate: func(context.Context, authorizer.Attributes) []authorizer.Attributes {
+					return []authorizer.Attributes{}
+				},
+			},
+			expected: authorizer.DecisionDeny,
+		},
+		{
+			name: "simple allow",
+			delegate: fakeAuthorizer(func(context.Context, authorizer.Attributes) (authorizer.Decision, string, error) {
+				return authorizer.DecisionAllow, "", nil
+			}),
+			attrGen:  simpleAttributesGenerator,
+			expected: authorizer.DecisionAllow,
+		},
+		{
+			name: "simple deny",
+			delegate: fakeAuthorizer(func(context.Context, authorizer.Attributes) (authorizer.Decision, string, error) {
+				return authorizer.DecisionDeny, "", nil
+			}),
+			attrGen:  simpleAttributesGenerator,
+			expected: authorizer.DecisionDeny,
+		},
+		{
+			name: "simple don't care",
+			delegate: fakeAuthorizer(func(context.Context, authorizer.Attributes) (authorizer.Decision, string, error) {
+				return authorizer.DecisionNoOpinion, "", nil
+			}),
+			attrGen:  simpleAttributesGenerator,
+			expected: authorizer.DecisionDeny,
+		},
+		{
+			name: "simple error",
+			delegate: fakeAuthorizer(func(context.Context, authorizer.Attributes) (authorizer.Decision, string, error) {
+				reason := "some error"
+
+				// shouldn't happen, but just in case
+				return authorizer.DecisionAllow, reason, errors.New(reason)
+			}),
+			attrGen:  simpleAttributesGenerator,
+			expected: authorizer.DecisionDeny,
+		},
+		{
+			name: "rewrite AND all authorizers allow",
+			delegate: fakeAuthorizer(func(context.Context, authorizer.Attributes) (authorizer.Decision, string, error) {
+				return authorizer.DecisionAllow, "", nil
+			}),
+			attrGen:  rewriteAttributesGenerator,
+			expected: authorizer.DecisionAllow,
+		},
+		{
+			name:     "rewrite AND and authorizers alternate allow/deny",
+			delegate: fakeAuthorizer(alternatingFunc()),
+			attrGen:  rewriteAttributesGenerator,
+			expected: authorizer.DecisionDeny,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			authorizer := rewrite.NewRewritingAuthorizer(tc.delegate, tc.attrGen)
+			decision, _, _ := authorizer.Authorize(context.Background(), nil)
+			if tc.expected != decision {
+				t.Errorf("expected decision %v, got %v", tc.expected, decision)
 			}
 		})
 	}
 }
 
-func createRequest(queryParams, headers map[string][]string) *http.Request {
-	r := httptest.NewRequest("GET", "/accounts", nil)
-	if queryParams != nil {
-		q := r.URL.Query()
-		for key, values := range queryParams {
-			for _, value := range values {
-				q.Add(key, value)
-			}
-		}
-		r.URL, _ = url.Parse(r.URL.String())
-		r.URL.RawQuery = q.Encode()
-	}
-	for key, values := range headers {
-		for _, value := range values {
-			r.Header.Add(key, value)
-		}
-	}
-	return r
+type fakeAttributesGenerator struct {
+	generate func(context.Context, authorizer.Attributes) []authorizer.Attributes
+}
+
+func (f *fakeAttributesGenerator) Generate(ctx context.Context, attrs authorizer.Attributes) []authorizer.Attributes {
+	return f.generate(ctx, attrs)
+}
+
+func fakeAuthorizer(authorize func(context.Context, authorizer.Attributes) (authorizer.Decision, string, error)) authorizer.Authorizer {
+	return authorizer.AuthorizerFunc(func(ctx context.Context, attr authorizer.Attributes) (authorizer.Decision, string, error) {
+		return authorize(ctx, attr)
+	})
 }
