@@ -28,7 +28,6 @@ import (
 	serverconfig "k8s.io/apiserver/pkg/server"
 	"k8s.io/klog/v2"
 
-	"github.com/brancz/kube-rbac-proxy/pkg/authn"
 	"github.com/brancz/kube-rbac-proxy/pkg/authn/identityheaders"
 	authz "github.com/brancz/kube-rbac-proxy/pkg/authorization"
 	"github.com/brancz/kube-rbac-proxy/pkg/server"
@@ -51,7 +50,6 @@ type ProxyOptions struct {
 
 	ProxyEndpointsPort int
 
-	OIDC           *authn.OIDCConfig
 	TokenAudiences []string
 }
 
@@ -72,15 +70,6 @@ func (o *ProxyOptions) AddFlags(flagset *pflag.FlagSet) {
 	flagset.StringVar(&o.UpstreamHeader.UserFieldName, "auth-header-user-field-name", "x-remote-user", "The name of the field inside a http(2) request header to tell the upstream server about the user's name")
 	flagset.StringVar(&o.UpstreamHeader.GroupsFieldName, "auth-header-groups-field-name", "x-remote-groups", "The name of the field inside a http(2) request header to tell the upstream server about the user's groups")
 	flagset.StringVar(&o.UpstreamHeader.GroupSeparator, "auth-header-groups-field-separator", "|", "The separator string used for concatenating multiple group names in a groups header field's value")
-
-	//Authn OIDC flags
-	flagset.StringVar(&o.OIDC.IssuerURL, "oidc-issuer", "", "The URL of the OpenID issuer, only HTTPS scheme will be accepted. If set, it will be used to verify the OIDC JSON Web Token (JWT).")
-	flagset.StringVar(&o.OIDC.ClientID, "oidc-clientID", "", "The client ID for the OpenID Connect client, must be set if oidc-issuer-url is set.")
-	flagset.StringVar(&o.OIDC.GroupsClaim, "oidc-groups-claim", "groups", "Identifier of groups in JWT claim, by default set to 'groups'")
-	flagset.StringVar(&o.OIDC.UsernameClaim, "oidc-username-claim", "email", "Identifier of the user in JWT claim, by default set to 'email'")
-	flagset.StringVar(&o.OIDC.GroupsPrefix, "oidc-groups-prefix", "", "If provided, all groups will be prefixed with this value to prevent conflicts with other authentication strategies.")
-	flagset.StringArrayVar(&o.OIDC.SupportedSigningAlgs, "oidc-sign-alg", []string{"RS256"}, "Supported signing algorithms, default RS256")
-	flagset.StringVar(&o.OIDC.CAFile, "oidc-ca-file", "", "If set, the OpenID server's certificate will be verified by one of the authorities in the oidc-ca-file, otherwise the host's root CA set will be used.")
 
 	flagset.StringSliceVar(&o.TokenAudiences, "auth-token-audiences", []string{}, "Comma-separated list of token audiences to accept. By default a token does not have to have any specific audience. It is recommended to set a specific audience.")
 
@@ -134,7 +123,6 @@ func (o *ProxyOptions) ApplyTo(c *server.KubeRBACProxyInfo, a *serverconfig.Auth
 	}
 
 	c.UpstreamForceH2C = o.UpstreamForceH2C
-	c.OIDC = o.OIDC
 	c.IgnorePaths = o.IgnorePaths
 	c.AllowPaths = o.AllowPaths
 	a.APIAudiences = o.TokenAudiences

@@ -68,7 +68,7 @@ spec:
       - name: kube-rbac-proxy
         image: quay.io/brancz/kube-rbac-proxy:KUBE_RBAC_PROXY_VERSION
         args:
-        - "--secure-listen-address=0.0.0.0:8443"
+        - "--secure-port=8443"
         - "--upstream=http://127.0.0.1:8081/"
         - "--logtostderr=true"
         - "--v=10"

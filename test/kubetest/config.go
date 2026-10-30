@@ -51,9 +51,9 @@ type KRPTestConfig struct {
 func NewBasicKubeRBACProxyTestConfig() *KRPTestConfig {
 	return &KRPTestConfig{
 		Flags: map[string]string{
-			"secure-listen-address": "0.0.0.0:8443",
-			"upstream":              "http://127.0.0.1:8081/",
-			"v":                     "10",
+			"secure-port": "8443",
+			"upstream":    "http://127.0.0.1:8081/",
+			"v":           "10",
 		},
 		UpstreamFlags: map[string]string{},
 		SAClusterRoleBindings: map[string]*rbacv1.ClusterRole{
