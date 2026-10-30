@@ -33,9 +33,8 @@ var _ authorizer.Authorizer = &rewritingAuthorizer{}
 const rewriterParams = iota
 
 type RewriteAttributesConfig struct {
-	Rewrites               *SubjectAccessReviewRewrites `json:"rewrites,omitempty"`
-	ResourceAttributes     *ResourceAttributes          `json:"resourceAttributes,omitempty"`
-	ResourceAttributesFile string                       `json:"-"`
+	Rewrites           *SubjectAccessReviewRewrites `json:"rewrites,omitempty"`
+	ResourceAttributes *ResourceAttributes          `json:"resourceAttributes,omitempty"`
 }
 
 // SubjectAccessReviewRewrites describes how SubjectAccessReview may be

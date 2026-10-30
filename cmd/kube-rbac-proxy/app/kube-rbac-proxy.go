@@ -72,15 +72,6 @@ that can perform RBAC authorization against the Kubernetes API using SubjectAcce
 		RunE: func(cmd *cobra.Command, args []string) error {
 			verflag.PrintAndExitIfRequested()
 
-			// convert previous version of options
-			if err := o.LegacyOptions.ConvertToNewOptions(
-				o.SecureServing,
-				o.DelegatingAuthentication,
-				o.DelegatingAuthorization,
-			); err != nil {
-				return err
-			}
-
 			fs := cmd.Flags()
 			k8sapiflag.PrintFlags(fs)
 
@@ -130,7 +121,8 @@ func (o *completedProxyRunOptions) Validate() []error {
 	errs = append(errs, o.DelegatingAuthentication.Validate()...)
 	errs = append(errs, o.DelegatingAuthorization.Validate()...)
 	errs = append(errs, o.ProxyOptions.Validate()...)
-	errs = append(errs, o.LegacyOptions.Validate()...)
+	errs = append(errs, o.OIDCOptions.Validate()...)
+	errs = append(errs, o.ProxyRunOptions.ExtraValidate()...)
 
 	return errs
 }
@@ -208,7 +200,7 @@ func Run(opts *completedProxyRunOptions) error {
 	mux.Handle("/", handler)
 
 	gr := &run.Group{}
-	if len(opts.LegacyOptions.SecureListenAddress) > 0 {
+	{
 		gr.Add(secureServerRunner(ctx, cfg.SecureServing, mux))
 
 		if cfg.KubeRBACProxyInfo.ProxyEndpointsSecureServing != nil {
@@ -264,7 +256,7 @@ func createKubeRBACProxyConfig(opts *completedProxyRunOptions) (*server.KubeRBAC
 		return nil, err
 	}
 
-	if err := opts.LegacyOptions.ApplyTo(proxyConfig.KubeRBACProxyInfo); err != nil {
+	if err := opts.OIDCOptions.ApplyTo(proxyConfig.KubeRBACProxyInfo); err != nil {
 		return nil, err
 	}
 
