@@ -23,14 +23,12 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
-	"github.com/oklog/run"
 	"github.com/spf13/cobra"
 
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	waitgroup "k8s.io/apimachinery/pkg/util/waitgroup"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/authorization/union"
@@ -72,15 +70,6 @@ that can perform RBAC authorization against the Kubernetes API using SubjectAcce
 		RunE: func(cmd *cobra.Command, args []string) error {
 			verflag.PrintAndExitIfRequested()
 
-			// convert previous version of options
-			if err := o.LegacyOptions.ConvertToNewOptions(
-				o.SecureServing,
-				o.DelegatingAuthentication,
-				o.DelegatingAuthorization,
-			); err != nil {
-				return err
-			}
-
 			fs := cmd.Flags()
 			k8sapiflag.PrintFlags(fs)
 
@@ -94,16 +83,15 @@ that can perform RBAC authorization against the Kubernetes API using SubjectAcce
 				return utilerrors.NewAggregate(errs)
 			}
 
-			return Run(completedOptions)
-		},
-		Args: func(cmd *cobra.Command, args []string) error {
-			for _, arg := range args {
-				if len(arg) > 0 {
-					return fmt.Errorf("%q does not take any arguments, got %q", cmd.CommandPath(), args)
-				}
+			// create the KubeRBACProxyConfig based on the completed options
+			proxyCfg, err := completedOptions.ProxyConfig()
+			if err != nil {
+				return err
 			}
-			return nil
+
+			return Run(proxyCfg)
 		},
+		Args: cobra.NoArgs,
 	}
 
 	fs := cmd.Flags()
@@ -130,9 +118,44 @@ func (o *completedProxyRunOptions) Validate() []error {
 	errs = append(errs, o.DelegatingAuthentication.Validate()...)
 	errs = append(errs, o.DelegatingAuthorization.Validate()...)
 	errs = append(errs, o.ProxyOptions.Validate()...)
-	errs = append(errs, o.LegacyOptions.Validate()...)
+	errs = append(errs, o.OIDCOptions.Validate()...)
+	errs = append(errs, o.ProxyRunOptions.ExtraValidate()...)
 
 	return errs
+}
+
+func (opts *completedProxyRunOptions) ProxyConfig() (*server.KubeRBACProxyConfig, error) {
+	proxyConfig := server.NewConfig()
+	if err := opts.SecureServing.ApplyTo(&proxyConfig.SecureServing); err != nil {
+		return nil, err
+	}
+
+	if opts.ProxySecureServing != nil {
+		if err := opts.ProxySecureServing.ApplyTo(&proxyConfig.KubeRBACProxyInfo.ProxyEndpointsSecureServing); err != nil {
+			return nil, err
+		}
+	}
+	if err := opts.DelegatingAuthentication.ApplyTo(
+		proxyConfig.DelegatingAuthentication,
+		proxyConfig.SecureServing,
+		nil,
+	); err != nil {
+		return nil, err
+	}
+
+	if err := opts.DelegatingAuthorization.ApplyTo(proxyConfig.DelegatingAuthorization); err != nil {
+		return nil, err
+	}
+
+	if err := opts.ProxyOptions.ApplyTo(proxyConfig.KubeRBACProxyInfo, proxyConfig.DelegatingAuthentication); err != nil {
+		return nil, err
+	}
+
+	if err := opts.OIDCOptions.ApplyTo(proxyConfig.KubeRBACProxyInfo); err != nil {
+		return nil, err
+	}
+
+	return proxyConfig, nil
 }
 
 // Complete sets defaults for the ProxyRunOptions.
@@ -156,14 +179,8 @@ func Complete(o *options.ProxyRunOptions) (*completedProxyRunOptions, error) {
 	return &completedProxyRunOptions{ProxyRunOptions: o}, nil
 }
 
-func Run(opts *completedProxyRunOptions) error {
-	cfg, err := createKubeRBACProxyConfig(opts)
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+func Run(cfg *server.KubeRBACProxyConfig) error {
+	ctx := serverconfig.SetupSignalContext()
 
 	var authenticator authenticator.Request
 	// If OIDC configuration provided, use oidc authenticator
@@ -201,100 +218,64 @@ func Run(opts *completedProxyRunOptions) error {
 	handler := identityheaders.WithAuthHeaders(proxy, cfg.KubeRBACProxyInfo.UpstreamHeaders)
 	handler = kubefilters.WithAuthorization(handler, authz, scheme.Codecs)
 	handler = kubefilters.WithAuthentication(handler, authenticator, http.HandlerFunc(filters.UnauthorizedHandler), cfg.DelegatingAuthentication.APIAudiences, cfg.DelegatingAuthentication.RequestHeaderConfig)
+	// passing an empty RequestInfoFactory results in attaching a non-resource RequestInfo to the context
 	handler = kubefilters.WithRequestInfo(handler, &request.RequestInfoFactory{})
 	handler = rewrite.WithKubeRBACProxyParamsHandler(handler, cfg.KubeRBACProxyInfo.Authorization.RewriteAttributesConfig)
 
+	var wg waitgroup.SafeWaitGroup
+	serverCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// listener for proxying HTTPS with authentication and authorization (on port --secure-port)
 	mux := http.NewServeMux()
 	mux.Handle("/", handler)
 
-	gr := &run.Group{}
-	if len(opts.LegacyOptions.SecureListenAddress) > 0 {
-		gr.Add(secureServerRunner(ctx, cfg.SecureServing, mux))
-
-		if cfg.KubeRBACProxyInfo.ProxyEndpointsSecureServing != nil {
-			proxyEndpointsMux := http.NewServeMux()
-			proxyEndpointsMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
-
-			gr.Add(secureServerRunner(ctx, cfg.KubeRBACProxyInfo.ProxyEndpointsSecureServing, proxyEndpointsMux))
-		}
-	}
-	{
-		sig := make(chan os.Signal, 1)
-		gr.Add(func() error {
-			signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-			<-sig
-			klog.Info("received interrupt, shutting down")
-			return nil
-		}, func(error) {
-			close(sig)
-		})
+	if err := wg.Add(1); err != nil {
+		return err
 	}
 
-	if err := gr.Run(); err != nil {
-		return fmt.Errorf("failed to run groups: %w", err)
-	}
+	go func() {
+		defer wg.Done()
+		defer cancel()
 
-	return nil
-}
-
-func createKubeRBACProxyConfig(opts *completedProxyRunOptions) (*server.KubeRBACProxyConfig, error) {
-	proxyConfig := server.NewConfig()
-	if err := opts.SecureServing.ApplyTo(&proxyConfig.SecureServing); err != nil {
-		return nil, err
-	}
-
-	if opts.ProxySecureServing != nil {
-		if err := opts.ProxySecureServing.ApplyTo(&proxyConfig.KubeRBACProxyInfo.ProxyEndpointsSecureServing); err != nil {
-			return nil, err
-		}
-	}
-	if err := opts.DelegatingAuthentication.ApplyTo(
-		proxyConfig.DelegatingAuthentication,
-		proxyConfig.SecureServing,
-		nil,
-	); err != nil {
-		return nil, err
-	}
-
-	if err := opts.DelegatingAuthorization.ApplyTo(proxyConfig.DelegatingAuthorization); err != nil {
-		return nil, err
-	}
-
-	if err := opts.ProxyOptions.ApplyTo(proxyConfig.KubeRBACProxyInfo, proxyConfig.DelegatingAuthentication); err != nil {
-		return nil, err
-	}
-
-	if err := opts.LegacyOptions.ApplyTo(proxyConfig.KubeRBACProxyInfo); err != nil {
-		return nil, err
-	}
-
-	return proxyConfig, nil
-}
-
-func secureServerRunner(
-	ctx context.Context,
-	config *serverconfig.SecureServingInfo,
-	handler http.Handler,
-) (func() error, func(error)) {
-	serverStopCtx, serverCtxCancel := context.WithCancel(ctx)
-
-	runner := func() error {
-		stoppedCh, listenerStoppedCh, err := config.Serve(handler, 10*time.Second, serverStopCtx.Done())
+		stoppedCh, listenerStoppedCh, err := cfg.SecureServing.Serve(mux, 10*time.Second, serverCtx.Done())
 		if err != nil {
-			serverCtxCancel()
-			return err
+			klog.Errorf("%v", err)
+			return
 		}
 
 		<-listenerStoppedCh
 		<-stoppedCh
-		return nil
+	}()
+
+	if cfg.KubeRBACProxyInfo.ProxyEndpointsSecureServing != nil {
+		// we need a second listener in order to serve proxy-specific endpoints
+		// on a different port (--proxy-endpoints-port)
+		proxyEndpointsMux := http.NewServeMux()
+		proxyEndpointsMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
+
+		if err := wg.Add(1); err != nil {
+			return err
+		}
+
+		go func() {
+			defer wg.Done()
+			defer cancel()
+
+			stoppedCh, listenerStoppedCh, err := cfg.KubeRBACProxyInfo.ProxyEndpointsSecureServing.Serve(proxyEndpointsMux, 10*time.Second, serverCtx.Done())
+			if err != nil {
+				klog.Errorf("%v", err)
+				return
+			}
+
+			<-listenerStoppedCh
+			<-stoppedCh
+		}()
 	}
 
-	interrupter := func(error) {
-		serverCtxCancel()
-	}
+	wg.Wait()
 
-	return runner, interrupter
+	return nil
 }
 
 func setupAuthorizer(krbInfo *server.KubeRBACProxyInfo, delegatedAuthz *serverconfig.AuthorizationInfo) (authorizer.Authorizer, error) {
