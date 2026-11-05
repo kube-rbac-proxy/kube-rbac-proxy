@@ -4,6 +4,14 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing image tag for backfill attestation.
+        required: true
+      subject_digest:
+        description: Existing image manifest digest to attest, in sha256:<hex> format.
+        required: true
 
 permissions: {}
 
@@ -23,6 +31,9 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
       packages: write
 
     steps:
@@ -34,6 +45,7 @@ jobs:
         persist-credentials: false
 
     - name: Setup Golang Environment
+      if: github.event_name != 'workflow_dispatch'
       uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
       with:
         go-version: ${{ env.go-version }}
@@ -47,6 +59,46 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Build images and push
+      if: github.event_name != 'workflow_dispatch'
       env:
         REGISTRY_PATH: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
       run: ./scripts/publish.sh
+
+    - name: Get image digest
+      if: github.event_name != 'workflow_dispatch'
+      id: image
+      env:
+        REGISTRY_PATH: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+      run: |
+        digest="$(docker buildx imagetools inspect "${REGISTRY_PATH}:${GITHUB_REF_NAME}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+        echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+    # Backfill-only path for existing releases. Normal release attestations should
+    # be created in the same tag-triggered workflow run that publishes the image.
+    - name: Backfill existing image attestation
+      if: github.event_name == 'workflow_dispatch'
+      id: input
+      env:
+        REGISTRY_PATH: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        IMAGE_TAG: ${{ inputs.tag }}
+        SUBJECT_DIGEST: ${{ inputs.subject_digest }}
+      run: |
+        if [[ ! "${SUBJECT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+          echo "subject-digest must be in sha256:<hex> format" >&2
+          exit 1
+        fi
+
+        resolved_digest="$(docker buildx imagetools inspect "${REGISTRY_PATH}:${IMAGE_TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+        if [[ "${resolved_digest}" != "${SUBJECT_DIGEST}" ]]; then
+          echo "provided digest ${SUBJECT_DIGEST} does not match ${REGISTRY_PATH}:${IMAGE_TAG} digest ${resolved_digest}" >&2
+          exit 1
+        fi
+
+        echo "digest=${SUBJECT_DIGEST}" >> "${GITHUB_OUTPUT}"
+
+    - name: Attest image
+      uses: actions/attest@6d86167fd16cb0683c2d8e56f2c2c28b9c799684 # v4.1.0
+      with:
+        subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        subject-digest: ${{ steps.image.outputs.digest || steps.input.outputs.digest }}
+        push-to-registry: true
