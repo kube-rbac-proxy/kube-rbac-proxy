@@ -18,81 +18,41 @@ package path
 
 import (
 	"context"
-	"path"
-	"strings"
+	"fmt"
 
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	pathauthorizer "k8s.io/apiserver/pkg/authorization/path"
 )
 
-type pathAuthorizer struct {
-	matchDecision, noMatchDecision authorizer.Decision
+// NewAllowedPathsAuthorizer returns an authorizer that allows requests to
+// `allowPaths` through with `NoOpinion` and denies all others. This ensures that
+// subsequent authorizers in a union are still called on the requests that pass through
+// this authorizer.
+// The provided paths can include simple glob patterns.
+func NewAllowedPathsAuthorizer(allowPaths []string) (authorizer.Authorizer, error) {
+	delegatedPathAuthorizer, err := pathauthorizer.NewAuthorizer(allowPaths)
+	if err != nil {
+		return nil, fmt.Errorf("error creating path authorizer: %v", err)
+	}
 
-	paths        sets.Set[string]
-	pathPatterns []string
-}
+	return authorizer.AuthorizerFunc(func(ctx context.Context, attr authorizer.Attributes) (authorizer.Decision, string, error) {
+		decision, reason, err := delegatedPathAuthorizer.Authorize(ctx, attr)
 
-func newPathAuthorizer(onMatch, onNoMatch authorizer.Decision, inputPaths []string) *pathAuthorizer {
-	var patterns []string
-	paths := sets.New[string]() // faster than trying to match every pattern every time
-	for _, p := range inputPaths {
-		p = strings.TrimPrefix(p, "/")
-		if len(p) == 0 {
-			// matches "/"
-			paths.Insert(p)
-			continue
+		// There is a match on the path, so we have no opinion and let subsequent
+		// authorizers in a union decide.
+		if err == nil && decision == authorizer.DecisionAllow {
+			return authorizer.DecisionNoOpinion, reason, nil
 		}
-		if strings.ContainsRune(p, '*') {
-			patterns = append(patterns, p)
-		} else {
-			paths.Insert(p)
-		}
-	}
 
-	return &pathAuthorizer{
-		matchDecision:   onMatch,
-		noMatchDecision: onNoMatch,
-		paths:           paths,
-		pathPatterns:    patterns,
-	}
+		return authorizer.DecisionDeny, fmt.Sprintf("NOT(%s)", reason), err
+	}), nil
 }
 
-func (a *pathAuthorizer) Authorize(ctx context.Context, attr authorizer.Attributes) (authorizer.Decision, string, error) {
-	pth := strings.TrimPrefix(attr.GetPath(), "/")
-	if a.paths.Has(pth) {
-		return a.matchDecision, "", nil
-	}
-
-	for _, pattern := range a.pathPatterns {
-		if found, err := path.Match(pattern, pth); err != nil {
-			return authorizer.DecisionNoOpinion, "Error", err
-		} else if found {
-			return a.matchDecision, "", nil
-		}
-	}
-
-	return a.noMatchDecision, "", nil
-}
-
-// ConditionsAwareAuthorize is not conditions-aware, converts the Authorize decision.
-func (a *pathAuthorizer) ConditionsAwareAuthorize(ctx context.Context, attr authorizer.Attributes) authorizer.ConditionsAwareDecision {
-	return authorizer.ConditionsAwareDecisionFromParts(a.Authorize(ctx, attr))
-}
-
-// EvaluateConditions is not supported by this authorizer.
-func (a *pathAuthorizer) EvaluateConditions(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
-	return authorizer.DecisionDeny, "", authorizer.ErrorConditionEvaluationNotSupported
-}
-
-func NewAllowPathAuthorizer(allowPaths []string) authorizer.Authorizer {
-	if len(allowPaths) == 0 {
-		return authorizer.AuthorizerFunc(func(context.Context, authorizer.Attributes) (authorizer.Decision, string, error) {
-			return authorizer.DecisionNoOpinion, "", nil
-		})
-	}
-	return newPathAuthorizer(authorizer.DecisionNoOpinion, authorizer.DecisionDeny, allowPaths)
-}
-
-func NewAlwaysAllowPathAuthorizer(alwaysAllowPaths []string) authorizer.Authorizer {
-	return newPathAuthorizer(authorizer.DecisionAllow, authorizer.DecisionNoOpinion, alwaysAllowPaths)
+// NewPassthroughAuthorizer returns an authorizer that allows on matches for
+// the given paths and has no opinion on all others. This allows skipping
+// subsequent authorizers in a union, effectively passing through the given
+// paths.
+// The given paths can include simple glob patterns.
+func NewPassthroughAuthorizer(ignorePaths []string) (authorizer.Authorizer, error) {
+	return pathauthorizer.NewAuthorizer(ignorePaths)
 }

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brancz/kube-rbac-proxy/test/kubetest"
 	corev1 "k8s.io/api/core/v1"
@@ -105,6 +106,7 @@ func checkLogsForMaskedToken(client kubernetes.Interface) kubetest.Action {
 					foundMaskedToken = true
 					break
 				} else {
+					time.Sleep(10 * time.Minute)
 					return fmt.Errorf("found TokenReview in logs but token is not masked")
 				}
 			}
