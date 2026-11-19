@@ -222,9 +222,13 @@ func parseAuthorizationConfigFile(filePath string) (*authz.AuthzConfig, error) {
 		return nil, fmt.Errorf("failed to parse config file content: %w", err)
 	}
 
-	// If RewriteAttributesConfig is not set, set it to an empty config.
-	// This is to avoid nil plenty of pointer dereference checks further down.
-	if configFile.AuthorizationConfig.RewriteAttributesConfig == nil {
+	if configFile.AuthorizationConfig == nil {
+		configFile.AuthorizationConfig = &authz.AuthzConfig{
+			RewriteAttributesConfig: &rewrite.RewriteAttributesConfig{},
+		}
+	} else if configFile.AuthorizationConfig.RewriteAttributesConfig == nil {
+		// If RewriteAttributesConfig is not set, set it to an empty config.
+		// This is to avoid nil plenty of pointer dereference checks further down.
 		configFile.AuthorizationConfig.RewriteAttributesConfig = &rewrite.RewriteAttributesConfig{}
 	}
 
