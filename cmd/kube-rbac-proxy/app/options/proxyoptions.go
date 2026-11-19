@@ -57,8 +57,6 @@ type ProxyOptions struct {
 	ProxyEndpointsPort int
 
 	TokenAudiences []string
-
-	DisableHTTP2Serving bool
 }
 
 func (o *ProxyOptions) AddFlags(flagset *pflag.FlagSet) {
@@ -83,9 +81,6 @@ func (o *ProxyOptions) AddFlags(flagset *pflag.FlagSet) {
 
 	// proxy endpoints flag
 	flagset.IntVar(&o.ProxyEndpointsPort, "proxy-endpoints-port", 0, "The port to securely serve proxy-specific endpoints (such as '/healthz'). Uses the host from the '--secure-listen-address'.")
-
-	// http2 serving flag, remove with k8s 1.31
-	flagset.BoolVar(&o.DisableHTTP2Serving, "disable-http2-serving", o.DisableHTTP2Serving, "If true, HTTP2 serving will be disabled [default=false]")
 }
 
 func (o *ProxyOptions) Validate() []error {
@@ -138,7 +133,6 @@ func (o *ProxyOptions) ApplyTo(krpInfo *server.KubeRBACProxyInfo, authInfo *serv
 		}
 	}
 
-	serving.DisableHTTP2 = o.DisableHTTP2Serving
 	krpInfo.UpstreamForceH2C = o.UpstreamForceH2C
 	krpInfo.UpstreamHeaders = o.UpstreamHeader
 	krpInfo.IgnorePaths = o.IgnorePaths
